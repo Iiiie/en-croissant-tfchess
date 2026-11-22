@@ -348,13 +348,7 @@ export function useRoleplayGame({
                       )
                     : 0;
 
-                const [whiteImage, blackImage, whiteMessage, blackMessage] = await Promise.all([
-                    showWhite
-                        ? pickProfileImage({ ...profilePick(whiteProfile), trigger, side: "white" })
-                        : Promise.resolve({ path: null, category: null, folder: null }),
-                    showBlack
-                        ? pickProfileImage({ ...profilePick(blackProfile), trigger, side: "black" })
-                        : Promise.resolve({ path: null, category: null, folder: null }),
+                const [whiteMessage, blackMessage] = await Promise.all([
                     showWhite
                         ? pickProfileMessage({
                               ...profilePick(whiteProfile),
@@ -363,7 +357,7 @@ export function useRoleplayGame({
                               playerName: record.white.name,
                               opponentName: record.black.name,
                           })
-                        : Promise.resolve({ message: null, category: null }),
+                        : Promise.resolve({ message: null, category: null, source: null }),
                     showBlack
                         ? pickProfileMessage({
                               ...profilePick(blackProfile),
@@ -372,7 +366,26 @@ export function useRoleplayGame({
                               playerName: record.black.name,
                               opponentName: record.white.name,
                           })
-                        : Promise.resolve({ message: null, category: null }),
+                        : Promise.resolve({ message: null, category: null, source: null }),
+                ]);
+
+                const [whiteImage, blackImage] = await Promise.all([
+                    showWhite
+                        ? pickProfileImage({
+                              ...profilePick(whiteProfile),
+                              trigger,
+                              side: "white",
+                              source: whiteMessage.source,
+                          })
+                        : Promise.resolve({ path: null, category: null, folder: null }),
+                    showBlack
+                        ? pickProfileImage({
+                              ...profilePick(blackProfile),
+                              trigger,
+                              side: "black",
+                              source: blackMessage.source,
+                          })
+                        : Promise.resolve({ path: null, category: null, folder: null }),
                 ]);
 
                 if (showWhite) {

@@ -6,7 +6,6 @@ import { positionFromFen } from "@/utils/chessops";
 import {
     DEFAULT_ARCHETYPE_ID,
     type DifferenceMessages,
-    EMPTY_MESSAGES,
     formatMessage,
     getArchetypeDir,
     getArchetypeImagesDir,
@@ -114,17 +113,44 @@ function rangeSpecificity(range: DifferenceRange): number {
     return Number.isFinite(range.max) ? range.max - range.min : Number.MAX_SAFE_INTEGER;
 }
 
-export function pickNearestDifferenceMessages(
+export type MediaSource =
+    | { kind: "profile"; profileId: string }
+    | { kind: "archetype"; archetypeId: string };
+
+export function buildMediaSources(profileId: string | null, archetypeIds: string[]): MediaSource[] {
+    const sources: MediaSource[] = [];
+    if (profileId) {
+        sources.push({ kind: "profile", profileId });
+    }
+
+    const seen = new Set<string>();
+    for (const archetypeId of archetypeIds) {
+        if (seen.has(archetypeId)) {
+            continue;
+        }
+        seen.add(archetypeId);
+        sources.push({ kind: "archetype", archetypeId });
+    }
+
+    return sources;
+}
+
+export type NearestDifferenceList = {
+    list: string[];
+    distance: number;
+};
+
+export function pickNearestDifferenceList(
     messages: DifferenceMessages,
     difference: number,
-): string[] {
+): NearestDifferenceList {
     const target = Math.abs(difference);
     const candidates = Object.entries(messages)
         .map(([key, list]) => ({ key, value: Number(key), list }))
         .filter((entry) => Number.isFinite(entry.value) && entry.list.length > 0);
 
     if (candidates.length === 0) {
-        return [];
+        return { list: [], distance: Number.POSITIVE_INFINITY };
     }
 
     candidates.sort((a, b) => {
@@ -132,20 +158,41 @@ export function pickNearestDifferenceMessages(
         return distance !== 0 ? distance : b.value - a.value;
     });
 
-    return candidates[0].list;
+    const best = candidates[0];
+    return { list: best.list, distance: Math.abs(best.value - target) };
 }
 
-function mergeDifferenceMessages(lists: DifferenceMessages[]): DifferenceMessages {
-    const merged: DifferenceMessages = {};
-    for (const list of lists) {
-        for (const [key, messages] of Object.entries(list)) {
-            if (messages.length === 0) {
-                continue;
-            }
-            (merged[key] ??= []).push(...messages);
-        }
+export function pickNearestDifferenceMessages(
+    messages: DifferenceMessages,
+    difference: number,
+): string[] {
+    return pickNearestDifferenceList(messages, difference).list;
+}
+
+export type MessageSourceCandidate = {
+    source: MediaSource;
+    category: ImageCategory;
+    categoryIndex: number;
+    distance: number;
+    list: string[];
+};
+
+export function selectBestMessageCandidate(
+    candidates: MessageSourceCandidate[],
+    random: () => number = Math.random,
+): MessageSourceCandidate | null {
+    if (candidates.length === 0) {
+        return null;
     }
-    return merged;
+
+    const minCategoryIndex = Math.min(...candidates.map((candidate) => candidate.categoryIndex));
+    const categoryCandidates = candidates.filter(
+        (candidate) => candidate.categoryIndex === minCategoryIndex,
+    );
+    const minDistance = Math.min(...categoryCandidates.map((candidate) => candidate.distance));
+    const best = categoryCandidates.filter((candidate) => candidate.distance === minDistance);
+    const index = Math.min(best.length - 1, Math.floor(random() * best.length));
+    return best[index];
 }
 
 export type IntermissionIntro = {
@@ -434,21 +481,22 @@ async function imagesForSubpath(roots: string[], parts: string[]): Promise<strin
     return lists.flat();
 }
 
-export async function pickProfileImage(args: {
-    profileId: string | null;
-    archetypeIds: string[];
+async function pickImageForSingleSource(args: {
+    source: MediaSource;
     trigger: IntermissionTrigger;
     side: "white" | "black";
 }): Promise<{ path: string | null; category: ImageCategory | null; folder: string | null }> {
-    const archetypeIds = args.archetypeIds;
-    const folder = args.profileId
-        ? await getProfileDir(args.profileId)
-        : await getArchetypeDir(archetypeIds[0] ?? DEFAULT_ARCHETYPE_ID);
+    const profileId = args.source.kind === "profile" ? args.source.profileId : null;
+    const archetypeIds = args.source.kind === "archetype" ? [args.source.archetypeId] : [];
+    const folder =
+        args.source.kind === "profile"
+            ? await getProfileDir(args.source.profileId)
+            : await getArchetypeDir(args.source.archetypeId);
 
     for (const category of args.trigger.candidates[args.side]) {
         if (isOutcomeCategory(category)) {
             const roots = await categoryRoots({
-                profileId: args.profileId,
+                profileId,
                 archetypeIds,
                 category,
             });
@@ -477,7 +525,7 @@ export async function pickProfileImage(args: {
 
         for (const candidateRole of roles) {
             const images = await imagesForCategory({
-                profileId: args.profileId,
+                profileId,
                 archetypeIds,
                 category,
                 role: candidateRole,
@@ -491,6 +539,46 @@ export async function pickProfileImage(args: {
     return { path: null, category: null, folder };
 }
 
+export async function pickProfileImage(args: {
+    profileId: string | null;
+    archetypeIds: string[];
+    trigger: IntermissionTrigger;
+    side: "white" | "black";
+    source?: MediaSource | null;
+}): Promise<{ path: string | null; category: ImageCategory | null; folder: string | null }> {
+    if (args.source) {
+        return pickImageForSingleSource({
+            source: args.source,
+            trigger: args.trigger,
+            side: args.side,
+        });
+    }
+
+    // No message source: still use a single image source rather than mixing
+    // profile and archetype media. Profile wins, then archetypes in order.
+    for (const source of buildMediaSources(args.profileId, args.archetypeIds)) {
+        const result = await pickImageForSingleSource({
+            source,
+            trigger: args.trigger,
+            side: args.side,
+        });
+        if (result.path) {
+            return result;
+        }
+    }
+
+    const folder = args.profileId
+        ? await getProfileDir(args.profileId)
+        : await getArchetypeDir(args.archetypeIds[0] ?? DEFAULT_ARCHETYPE_ID);
+    return { path: null, category: null, folder };
+}
+
+async function readMessagesForSource(source: MediaSource): Promise<PlayerMessages> {
+    return source.kind === "profile"
+        ? readProfileMessages(source.profileId)
+        : readArchetypeMessages(source.archetypeId);
+}
+
 export async function pickProfileMessage(args: {
     profileId: string | null;
     archetypeIds: string[];
@@ -498,41 +586,75 @@ export async function pickProfileMessage(args: {
     side: "white" | "black";
     playerName: string;
     opponentName: string;
-}): Promise<{ message: string | null; category: ImageCategory | null }> {
-    const archetypeIds = args.archetypeIds;
-    const sources: PlayerMessages[] = [
-        args.profileId ? await readProfileMessages(args.profileId) : EMPTY_MESSAGES,
-        ...(await Promise.all(
-            archetypeIds.map((archetypeId) => readArchetypeMessages(archetypeId)),
-        )),
-    ];
+}): Promise<{
+    message: string | null;
+    category: ImageCategory | null;
+    source: MediaSource | null;
+}> {
+    const sources = buildMediaSources(args.profileId, args.archetypeIds);
+    const loaded = await Promise.all(
+        sources.map(async (source) => ({
+            source,
+            messages: await readMessagesForSource(source),
+        })),
+    );
 
-    for (const category of args.trigger.candidates[args.side]) {
-        let pool: string[];
-        if (isOutcomeCategory(category)) {
-            const merged = mergeDifferenceMessages(sources.map((messages) => messages[category]));
-            pool = pickNearestDifferenceMessages(merged, args.trigger.magnitude);
-        } else {
-            pool = sources.flatMap((messages) => messages[category]);
-        }
-
-        if (pool.length > 0) {
-            const template = pickRandom(pool);
-            if (template) {
-                return {
-                    message: formatMessage(template, {
-                        piece: args.trigger.capturedRole,
-                        player: args.playerName,
-                        opponent: args.opponentName,
-                        color: args.side,
-                    }),
-                    category,
-                };
+    const candidates: MessageSourceCandidate[] = [];
+    for (const { source, messages } of loaded) {
+        const categories = args.trigger.candidates[args.side];
+        for (let categoryIndex = 0; categoryIndex < categories.length; categoryIndex++) {
+            const category = categories[categoryIndex];
+            if (isOutcomeCategory(category)) {
+                const nearest = pickNearestDifferenceList(
+                    messages[category],
+                    args.trigger.magnitude,
+                );
+                if (nearest.list.length > 0) {
+                    candidates.push({
+                        source,
+                        category,
+                        categoryIndex,
+                        distance: nearest.distance,
+                        list: nearest.list,
+                    });
+                    break;
+                }
+            } else {
+                const list = messages[category];
+                if (list.length > 0) {
+                    candidates.push({
+                        source,
+                        category,
+                        categoryIndex,
+                        distance: 0,
+                        list,
+                    });
+                    break;
+                }
             }
         }
     }
 
-    return { message: null, category: null };
+    const best = selectBestMessageCandidate(candidates);
+    if (!best) {
+        return { message: null, category: null, source: null };
+    }
+
+    const template = pickRandom(best.list);
+    if (!template) {
+        return { message: null, category: null, source: null };
+    }
+
+    return {
+        message: formatMessage(template, {
+            piece: args.trigger.capturedRole,
+            player: args.playerName,
+            opponent: args.opponentName,
+            color: args.side,
+        }),
+        category: best.category,
+        source: best.source,
+    };
 }
 
 export function resolveIntermissionDuration(

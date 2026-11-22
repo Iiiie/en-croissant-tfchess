@@ -636,6 +636,7 @@ export async function writePlayersReadme(
         "- `messages.json` — `WIN`/`LOSS` message lists keyed by material difference",
         '  e.g. `{ "WIN": { "0": ["..."] }, "LOSS": { "0": ["..."], "12": ["..."] } }`',
         '  The reserved `"//"` key is ignored by the app and safe to delete.',
+        "- Media pairing: a message from an archetype only uses images from that same archetype.",
         "- `history.json` — games played with this profile",
         "",
         "Supported media: png, jpg, jpeg, gif, webp, avif, bmp, svg, webm, mp4, m4v, mov, ogv.",

@@ -17,12 +17,16 @@ import {
     updateRating,
 } from "../playerProfile";
 import {
+    buildMediaSources,
     getIntermissionTrigger,
     getMoverMaterialDiff,
     materialDurationMultiplier,
+    type MediaSource,
     parseDifferenceRange,
+    pickNearestDifferenceList,
     pickNearestDifferenceMessages,
     resolveIntermissionDuration,
+    selectBestMessageCandidate,
     shouldPlayIntermission,
 } from "../roleplay";
 
@@ -181,6 +185,111 @@ describe("difference messages", () => {
     test("ignores empty lists", () => {
         expect(pickNearestDifferenceMessages({ "0": [], "4": ["four"] }, 0)).toEqual(["four"]);
         expect(pickNearestDifferenceMessages({}, 5)).toEqual([]);
+    });
+});
+
+describe("media sources", () => {
+    test("keeps the profile first and deduplicates archetypes", () => {
+        expect(buildMediaSources("profile-1", ["a", "b", "a"])).toEqual([
+            { kind: "profile", profileId: "profile-1" },
+            { kind: "archetype", archetypeId: "a" },
+            { kind: "archetype", archetypeId: "b" },
+        ]);
+    });
+
+    test("guests only have archetype sources", () => {
+        expect(buildMediaSources(null, ["default"])).toEqual([
+            { kind: "archetype", archetypeId: "default" },
+        ]);
+    });
+});
+
+describe("source pairing", () => {
+    const profile: MediaSource = { kind: "profile", profileId: "profile-1" };
+    const pet: MediaSource = { kind: "archetype", archetypeId: "pet" };
+
+    test("nearest difference also reports its distance", () => {
+        expect(pickNearestDifferenceList({ "0": ["zero"], "12": ["twelve"] }, 9)).toEqual({
+            list: ["twelve"],
+            distance: 3,
+        });
+        expect(pickNearestDifferenceList({}, 5)).toEqual({
+            list: [],
+            distance: Number.POSITIVE_INFINITY,
+        });
+    });
+
+    test("an earlier category beats a later category", () => {
+        const best = selectBestMessageCandidate(
+            [
+                {
+                    source: profile,
+                    category: "default",
+                    categoryIndex: 3,
+                    distance: 0,
+                    list: ["default"],
+                },
+                {
+                    source: pet,
+                    category: "LOSS",
+                    categoryIndex: 0,
+                    distance: 4,
+                    list: ["loss"],
+                },
+            ],
+            () => 0,
+        );
+
+        expect(best?.source).toEqual(pet);
+        expect(best?.list).toEqual(["loss"]);
+    });
+
+    test("the source with the nearest list wins", () => {
+        const best = selectBestMessageCandidate(
+            [
+                {
+                    source: profile,
+                    category: "LOSS",
+                    categoryIndex: 0,
+                    distance: 9,
+                    list: ["profile"],
+                },
+                {
+                    source: pet,
+                    category: "LOSS",
+                    categoryIndex: 0,
+                    distance: 3,
+                    list: ["pet"],
+                },
+            ],
+            () => 0,
+        );
+
+        expect(best?.source).toEqual(pet);
+        expect(best?.list).toEqual(["pet"]);
+    });
+
+    test("ties pick one source and never merge their lists", () => {
+        const candidates = [
+            {
+                source: profile,
+                category: "LOSS" as const,
+                categoryIndex: 1,
+                distance: 0,
+                list: ["profile"],
+            },
+            {
+                source: pet,
+                category: "LOSS" as const,
+                categoryIndex: 1,
+                distance: 0,
+                list: ["pet"],
+            },
+        ];
+
+        expect(selectBestMessageCandidate(candidates, () => 0)?.source).toEqual(profile);
+        expect(selectBestMessageCandidate(candidates, () => 0.99)?.source).toEqual(pet);
+        expect(selectBestMessageCandidate([], () => 0)).toBeNull();
     });
 });
 
