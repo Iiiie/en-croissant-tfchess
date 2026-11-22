@@ -35,6 +35,7 @@ import {
     roleplayWinIntermissionsAtom,
 } from "@/state/atoms";
 import { getPGN } from "@/utils/chess";
+import { randomBpm } from "@/utils/intermissionTiming";
 import i18n from "@/i18n";
 import {
     appendProfileHistory,
@@ -433,9 +434,7 @@ export function useRoleplayGame({
                     },
                 };
 
-                const pulseBpm = Math.round(
-                    Math.min(pulseMin, pulseMax) + Math.random() * Math.abs(pulseMax - pulseMin),
-                );
+                const pulseBpm = randomBpm(pulseMin, pulseMax);
 
                 const payload: IntermissionPayload = {
                     id,

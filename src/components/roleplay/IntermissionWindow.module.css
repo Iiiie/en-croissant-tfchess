@@ -47,7 +47,16 @@
   border-radius: 50%;
   background: #ff4fa3;
   box-shadow: 0 0 28px #ff4fa3;
+  opacity: 0.35;
+  transform: scale(0.8);
+  will-change: opacity, transform;
+}
+
+/* The pulse only runs in the main phase, so its first peak coincides with the
+   first tick at the shared beat anchor. */
+.pulsing .dot {
   animation: dotPulse var(--dot-duration, 0.6s) ease-in-out infinite;
+  animation-delay: var(--beat-lead, 0ms);
 }
 
 .halves {
@@ -116,6 +125,10 @@
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
 }
 
+.timer {
+  font-variant-numeric: tabular-nums;
+}
+
 .folderHint {
   word-break: break-all;
 }
@@ -136,17 +149,17 @@
 @keyframes dotPulse {
   0%,
   100% {
-    opacity: 0.35;
-    transform: scale(0.8);
-  }
-  50% {
     opacity: 1;
     transform: scale(1.15);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dot {
+  .pulsing .dot {
     animation: none;
   }
 }

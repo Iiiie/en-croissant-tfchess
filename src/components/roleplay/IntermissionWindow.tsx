@@ -14,10 +14,23 @@ import {
 import { IconX } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import LocalMedia from "@/components/common/LocalMedia";
-import { playTick } from "@/utils/sound";
+import {
+  BEAT_LEAD_MS,
+  bpmToIntervalMs,
+  createDeadlineTimer,
+  remainingTenthsAt,
+} from "@/utils/intermissionTiming";
+import { prepareTick, startTickTicker } from "@/utils/sound";
 import type { GameSide, IntermissionEndReason } from "@/utils/playerProfile";
 import {
   emitIntermissionEnded,
@@ -132,7 +145,7 @@ function SidePanel({
           <Progress value={progress} size="lg" mt="xs" />
 
           <Group justify="space-between">
-            <Text c="gray.3" size="sm">
+            <Text c="gray.3" size="sm" className={classes.timer}>
               {t("Roleplay.TimeLeft", { seconds: (state.remaining / 1000).toFixed(1) })}
             </Text>
             <Button variant="white" color="dark" size="xs" onClick={() => onEnd(side, "closed")}>
@@ -171,9 +184,14 @@ export function IntermissionOverlay({
 
   const endedRef = useRef(ended);
   const remainingRef = useRef(remaining);
-  const startedAtRef = useRef({ white: 0, black: 0 });
-  // Frozen for the whole intermission: chosen once when the intermission starts.
-  const pulseDurationRef = useRef(`${60 / Math.max(1, payload.pulseBpm)}s`);
+  // One monotonic timeline for the whole main phase. The countdown, the CSS
+  // pulse and the tick scheduler all derive their beat from this anchor.
+  const timelineRef = useRef<{ id: string; startPerf: number; intervalMs: number } | null>(null);
+  const lastTenthsRef = useRef({ white: -1, black: -1 });
+  const deadlineCleanupRef = useRef<{
+    white: (() => void) | null;
+    black: (() => void) | null;
+  }>({ white: null, black: null });
   const reasonsRef = useRef<{ white: IntermissionEndReason; black: IntermissionEndReason }>({
     white: "closed",
     black: "closed",
@@ -188,13 +206,24 @@ export function IntermissionOverlay({
     }
     if (phase === "in") {
       const timer = setTimeout(() => {
-        startedAtRef.current = { white: Date.now(), black: Date.now() };
+        const initial = {
+          white: payload.sides.white.durationMs,
+          black: payload.sides.black.durationMs,
+        };
+        remainingRef.current = initial;
+        setRemaining(initial);
         setPhase("main");
       }, 3000);
       return () => clearTimeout(timer);
     }
     return;
-  }, [phase]);
+  }, [phase, payload]);
+
+  // Decode the tick during the intro/fade so the first beat is already ready.
+  // This never gates the timeline: a failure just means silent/fallback ticks.
+  useEffect(() => {
+    void prepareTick();
+  }, [payload.id]);
 
   useEffect(() => {
     return () => {
@@ -209,6 +238,8 @@ export function IntermissionOverlay({
       if (!payload.show[side] || endedRef.current[side]) {
         return;
       }
+      deadlineCleanupRef.current[side]?.();
+      deadlineCleanupRef.current[side] = null;
       const nextEnded = { ...endedRef.current, [side]: true };
       endedRef.current = nextEnded;
       reasonsRef.current[side] = reason;
@@ -228,59 +259,131 @@ export function IntermissionOverlay({
     [onEnded, payload],
   );
 
+  const endSideRef = useRef(endSide);
+  useEffect(() => {
+    endSideRef.current = endSide;
+  }, [endSide]);
+
+  // Main-phase timeline: one anchor shared by the countdown, the pulse and the
+  // tick scheduler. Deadlines are absolute, so dropped frames cannot extend an
+  // intermission.
+  useLayoutEffect(() => {
+    if (phase !== "main") {
+      return;
+    }
+    const startPerf = performance.now();
+    const intervalMs = bpmToIntervalMs(payload.pulseBpm);
+    timelineRef.current = { id: payload.id, startPerf, intervalMs };
+    lastTenthsRef.current = {
+      white: remainingTenthsAt(payload.sides.white.durationMs, 0),
+      black: remainingTenthsAt(payload.sides.black.durationMs, 0),
+    };
+
+    remainingRef.current = {
+      white: payload.sides.white.durationMs,
+      black: payload.sides.black.durationMs,
+    };
+
+    const deadlineCleanups = deadlineCleanupRef.current;
+    for (const side of ["white", "black"] as const) {
+      if (!payload.show[side] || endedRef.current[side]) {
+        continue;
+      }
+      deadlineCleanups[side]?.();
+      deadlineCleanups[side] = createDeadlineTimer(startPerf + payload.sides[side].durationMs, () =>
+        endSideRef.current(side, "timeout"),
+      );
+    }
+
+    const stopTicker = startTickTicker({
+      startPerfMs: startPerf,
+      intervalMs,
+      leadMs: BEAT_LEAD_MS,
+    });
+
+    return () => {
+      stopTicker();
+      for (const side of ["white", "black"] as const) {
+        deadlineCleanups[side]?.();
+        deadlineCleanups[side] = null;
+      }
+      timelineRef.current = null;
+    };
+  }, [phase, payload]);
+
+  // Paint the countdown in tenths only, isolated from the media tree.
   useEffect(() => {
     if (phase !== "main") {
       return;
     }
-    const interval = setInterval(() => {
-      let changed = false;
-      const nextRemaining = { ...remainingRef.current };
+    let frame = 0;
+    const update = () => {
+      const timeline = timelineRef.current;
+      if (timeline && timeline.id === payload.id) {
+        const elapsed = Math.max(0, performance.now() - timeline.startPerf);
+        const next = { ...remainingRef.current };
+        let changed = false;
+        for (const side of ["white", "black"] as const) {
+          if (!payload.show[side] || endedRef.current[side]) {
+            continue;
+          }
+          const left = Math.max(0, payload.sides[side].durationMs - elapsed);
+          const tenths = Math.ceil(left / 100);
+          if (tenths !== lastTenthsRef.current[side]) {
+            lastTenthsRef.current[side] = tenths;
+            next[side] = left;
+            changed = true;
+          }
+          if (left <= 0) {
+            endSideRef.current(side, "timeout");
+          }
+        }
+        if (changed) {
+          remainingRef.current = next;
+          setRemaining(next);
+        }
+      }
+      frame = requestAnimationFrame(update);
+    };
+    frame = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(frame);
+  }, [phase, payload]);
+
+  // A throttled/hidden window can delay timers; re-check deadlines on return.
+  useEffect(() => {
+    if (phase !== "main") {
+      return;
+    }
+    const checkDeadlines = () => {
+      const timeline = timelineRef.current;
+      if (!timeline) {
+        return;
+      }
+      const elapsed = performance.now() - timeline.startPerf;
       for (const side of ["white", "black"] as const) {
         if (!payload.show[side] || endedRef.current[side]) {
           continue;
         }
-        const duration = payload.sides[side].durationMs;
-        const next = Math.max(0, duration - (Date.now() - startedAtRef.current[side]));
-        if (next !== nextRemaining[side]) {
-          nextRemaining[side] = next;
-          changed = true;
-        }
-        if (next <= 0) {
-          endSide(side, "timeout");
+        if (elapsed >= payload.sides[side].durationMs) {
+          endSideRef.current(side, "timeout");
         }
       }
-      if (changed) {
-        remainingRef.current = nextRemaining;
-        setRemaining(nextRemaining);
-      }
-    }, 50);
-    return () => clearInterval(interval);
-  }, [phase, payload, endSide]);
-
-  useEffect(() => {
-    if (phase !== "main") {
-      return;
-    }
-
-    // Use the app's normal audio pipeline (WebKit permits it, unlike a fresh
-    // AudioContext in this window) and compensate drift with absolute times.
-    const interval = parseFloat(pulseDurationRef.current) * 1000;
-    let next = performance.now() + interval;
-    let timer = window.setTimeout(function tick() {
-      playTick();
-      next += interval;
-      timer = window.setTimeout(tick, Math.max(0, next - performance.now()));
-    }, interval);
-
-    return () => window.clearTimeout(timer);
-  }, [phase, payload.pulseBpm]);
+    };
+    document.addEventListener("visibilitychange", checkDeadlines);
+    window.addEventListener("focus", checkDeadlines);
+    return () => {
+      document.removeEventListener("visibilitychange", checkDeadlines);
+      window.removeEventListener("focus", checkDeadlines);
+    };
+  }, [phase, payload]);
 
   const mediaError = useCallback((side: GameSide) => {
     setMediaFailed((previous) => ({ ...previous, [side]: true }));
   }, []);
 
   const rootStyle = {
-    "--dot-duration": pulseDurationRef.current,
+    "--dot-duration": `${bpmToIntervalMs(payload.pulseBpm)}ms`,
+    "--beat-lead": `${BEAT_LEAD_MS}ms`,
     zIndex: 1000,
     opacity: phase === "intro" || phase === "out" ? 0 : 1,
   } as CSSProperties;
@@ -300,7 +403,10 @@ export function IntermissionOverlay({
           <Text className={classes.introText}>{payload.intro}</Text>
         </Box>
       )}
-      <Box className={classes.root} style={rootStyle}>
+      <Box
+        className={`${classes.root}${phase === "main" ? ` ${classes.pulsing}` : ""}`}
+        style={rootStyle}
+      >
         <ActionIcon className={classes.close} onClick={closeAll} aria-label={t("Common.Close")}>
           <IconX size="1.2rem" />
         </ActionIcon>
@@ -524,7 +630,7 @@ export default function IntermissionWindow({ payload }: { payload: IntermissionP
   }
 
   const pulseStyle = {
-    "--pulse-duration": `${60 / Math.max(1, currentPayload.pulseBpm)}s`,
+    "--dot-duration": `${bpmToIntervalMs(currentPayload.pulseBpm)}ms`,
   } as CSSProperties;
 
   const closeAll = () => {
@@ -536,7 +642,7 @@ export default function IntermissionWindow({ payload }: { payload: IntermissionP
   };
 
   return (
-    <Box className={classes.root} style={pulseStyle}>
+    <Box className={`${classes.root} ${classes.pulsing}`} style={pulseStyle}>
       <ActionIcon className={classes.close} onClick={closeAll} aria-label={t("Common.Close")}>
         <IconX size="1.2rem" />
       </ActionIcon>

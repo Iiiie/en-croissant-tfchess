@@ -91,6 +91,7 @@ mod server {
                                 header::CONTENT_RANGE,
                                 format!("bytes {start}-{end}/{total_len}"),
                             ),
+                            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".to_string()),
                         ],
                         chunk,
                     )
@@ -105,6 +106,7 @@ mod server {
                 (header::CONTENT_TYPE, content_type.to_string()),
                 (header::ACCEPT_RANGES, "bytes".to_string()),
                 (header::CONTENT_LENGTH, total_len.to_string()),
+                (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".to_string()),
             ],
             data,
         )

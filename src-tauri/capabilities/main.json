@@ -43,6 +43,7 @@
         "fs:write-all",
         "clipboard-manager:allow-write-text",
         "fs:scope-home-recursive",
+        "fs:scope-resource-recursive",
         "window-state:default",
         {
             "identifier": "fs:scope-appdata-recursive",

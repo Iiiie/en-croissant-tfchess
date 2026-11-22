@@ -76,6 +76,7 @@ import {
   telemetryEnabledAtom,
 } from "@/state/atoms";
 import { keyMapAtom } from "@/state/keybinds";
+import { MAX_BPM, MIN_BPM } from "@/utils/intermissionTiming";
 import FileInput from "../common/FileInput";
 import OpenFolderButton from "../common/OpenFolderButton";
 import BoardSelect from "./BoardSelect";
@@ -879,7 +880,15 @@ export default function Page() {
         title: t("Settings.Roleplay.PulseMin"),
         description: t("Settings.Roleplay.PulseMin.Desc"),
         keywords: ["roleplay", "intermission", "pulse", "rhythm", "bpm", "minimum"],
-        render: () => <NumberSetting value={pulseMin} onChange={setPulseMin} />,
+        render: () => (
+          <NumberSetting
+            value={pulseMin}
+            onChange={setPulseMin}
+            min={MIN_BPM}
+            max={MAX_BPM}
+            step={1}
+          />
+        ),
       },
       {
         id: "roleplay-pulse-max",
@@ -887,7 +896,15 @@ export default function Page() {
         title: t("Settings.Roleplay.PulseMax"),
         description: t("Settings.Roleplay.PulseMax.Desc"),
         keywords: ["roleplay", "intermission", "pulse", "rhythm", "bpm", "maximum"],
-        render: () => <NumberSetting value={pulseMax} onChange={setPulseMax} />,
+        render: () => (
+          <NumberSetting
+            value={pulseMax}
+            onChange={setPulseMax}
+            min={MIN_BPM}
+            max={MAX_BPM}
+            step={1}
+          />
+        ),
       },
       {
         id: "roleplay-display",
