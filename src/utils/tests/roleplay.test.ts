@@ -3,16 +3,28 @@ import type { GameMove } from "@/bindings";
 import {
     buildHistoryEntry,
     createGameRecord,
+    EMPTY_MESSAGES,
     formatMessage,
     isImageFileName,
     isMediaFileName,
     isVideoFileName,
+    MESSAGES_EXAMPLE,
+    messagesSchema,
     newPlayerProfile,
     resultScore,
+    serializeMessagesFile,
     snapshotPlayer,
     updateRating,
 } from "../playerProfile";
-import { getIntermissionTrigger, resolveIntermissionDuration } from "../roleplay";
+import {
+    getIntermissionTrigger,
+    getMoverMaterialDiff,
+    materialDurationMultiplier,
+    parseDifferenceRange,
+    pickNearestDifferenceMessages,
+    resolveIntermissionDuration,
+    shouldPlayIntermission,
+} from "../roleplay";
 
 function move(uci: string, san: string, fenAfter: string): GameMove {
     return {
@@ -60,8 +72,27 @@ describe("intermission triggers", () => {
         expect(trigger?.capturedRole).toBe("pawn");
         expect(trigger?.isCheck).toBe(false);
         expect(trigger?.severity).toBe(1);
-        expect(trigger?.candidates.white).toEqual(["took", "default"]);
-        expect(trigger?.candidates.black).toEqual(["lost", "default"]);
+        expect(trigger?.materialDiff).toBe(1);
+        expect(trigger?.magnitude).toBe(1);
+        expect(trigger?.outcome).toEqual({ white: "WIN", black: "LOSS" });
+        expect(trigger?.candidates.white).toEqual(["WIN", "took", "default"]);
+        expect(trigger?.candidates.black).toEqual(["LOSS", "lost", "default"]);
+    });
+
+    test("the mover gets WIN even while behind on material", () => {
+        // Black has an extra queen; White captures a pawn but stays behind.
+        const trigger = getIntermissionTrigger({
+            initialFen: "q3k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1",
+            moves: [move("e4d5", "exd5", "q3k3/8/8/3P4/8/8/8/4K3 b - - 0 1")],
+            moveIndex: 0,
+        });
+
+        expect(trigger?.materialDiff).toBe(-8);
+        expect(trigger?.magnitude).toBe(8);
+        expect(trigger?.outcome).toEqual({ white: "WIN", black: "LOSS" });
+        expect(trigger?.candidates.white).toEqual(["WIN", "took", "default"]);
+        expect(trigger?.candidates.black).toEqual(["LOSS", "lost", "default"]);
+        expect(materialDurationMultiplier(-8, 1)).toBe(0);
     });
 
     test("detects a check", () => {
@@ -76,8 +107,11 @@ describe("intermission triggers", () => {
         expect(trigger?.moveColor).toBe("white");
         expect(trigger?.isCheck).toBe(true);
         expect(trigger?.severity).toBe(3);
-        expect(trigger?.candidates.white).toEqual(["check", "default"]);
-        expect(trigger?.candidates.black).toEqual(["checked", "default"]);
+        expect(trigger?.materialDiff).toBe(5);
+        expect(trigger?.magnitude).toBe(5);
+        expect(trigger?.outcome).toEqual({ white: "WIN", black: "LOSS" });
+        expect(trigger?.candidates.white).toEqual(["WIN", "check", "default"]);
+        expect(trigger?.candidates.black).toEqual(["LOSS", "checked", "default"]);
     });
 
     test("a capture with check combines severity", () => {
@@ -91,8 +125,86 @@ describe("intermission triggers", () => {
         expect(trigger?.isCheck).toBe(true);
         expect(trigger?.capturedRole).toBe("queen");
         expect(trigger?.severity).toBe(11);
-        expect(trigger?.candidates.white).toEqual(["took", "check", "default"]);
-        expect(trigger?.candidates.black).toEqual(["lost", "checked", "default"]);
+        expect(trigger?.materialDiff).toBe(9);
+        expect(trigger?.magnitude).toBe(9);
+        expect(trigger?.outcome).toEqual({ white: "WIN", black: "LOSS" });
+        expect(trigger?.candidates.white).toEqual(["WIN", "took", "check", "default"]);
+        expect(trigger?.candidates.black).toEqual(["LOSS", "lost", "checked", "default"]);
+    });
+});
+
+describe("material difference", () => {
+    test("uses the mover's signed perspective", () => {
+        expect(getMoverMaterialDiff(4, "white")).toBe(4);
+        expect(getMoverMaterialDiff(4, "black")).toBe(-4);
+    });
+
+    test("scales with the mover's material difference", () => {
+        expect(materialDurationMultiplier(2, 1)).toBe(2);
+        expect(materialDurationMultiplier(20, 0.1)).toBe(2);
+        expect(materialDurationMultiplier(-10, 1)).toBe(0);
+        expect(materialDurationMultiplier(10, 0)).toBe(1);
+    });
+
+    test("gates intermissions by the absolute difference", () => {
+        expect(shouldPlayIntermission(0, 0)).toBe(true);
+        expect(shouldPlayIntermission(4, 5)).toBe(false);
+        expect(shouldPlayIntermission(5, 5)).toBe(true);
+        expect(shouldPlayIntermission(-5, 5)).toBe(true);
+        expect(shouldPlayIntermission(103, 103)).toBe(true);
+    });
+});
+
+describe("difference ranges", () => {
+    test("parses exact and ranged folder names", () => {
+        expect(parseDifferenceRange("5")).toEqual({ min: 5, max: 5 });
+        expect(parseDifferenceRange("1-11")).toEqual({ min: 1, max: 11 });
+        expect(parseDifferenceRange("12+")).toEqual({ min: 12, max: Number.POSITIVE_INFINITY });
+        expect(parseDifferenceRange("queen")).toBeNull();
+        expect(parseDifferenceRange("")).toBeNull();
+    });
+});
+
+describe("difference messages", () => {
+    test("uses the nearest filled difference", () => {
+        const messages = { "0": ["zero"], "12": ["twelve"] };
+        expect(pickNearestDifferenceMessages(messages, 9)).toEqual(["twelve"]);
+        expect(pickNearestDifferenceMessages(messages, 0)).toEqual(["zero"]);
+        expect(pickNearestDifferenceMessages(messages, 103)).toEqual(["twelve"]);
+    });
+
+    test("ties go to the higher difference", () => {
+        const messages = { "0": ["zero"], "12": ["twelve"] };
+        expect(pickNearestDifferenceMessages(messages, 6)).toEqual(["twelve"]);
+    });
+
+    test("ignores empty lists", () => {
+        expect(pickNearestDifferenceMessages({ "0": [], "4": ["four"] }, 0)).toEqual(["four"]);
+        expect(pickNearestDifferenceMessages({}, 5)).toEqual([]);
+    });
+});
+
+describe("messages file serialization", () => {
+    test("new files contain only the example, WIN and LOSS", () => {
+        const parsed = JSON.parse(serializeMessagesFile(EMPTY_MESSAGES));
+        expect(Object.keys(parsed)).toEqual(["//", "WIN", "LOSS"]);
+        expect(parsed["//"]).toEqual(MESSAGES_EXAMPLE);
+        expect(parsed.WIN).toEqual({});
+        expect(parsed.LOSS).toEqual({});
+        expect(messagesSchema.safeParse(parsed).success).toBe(true);
+    });
+
+    test("preserves non-empty legacy messages", () => {
+        const parsed = JSON.parse(
+            serializeMessagesFile({
+                ...EMPTY_MESSAGES,
+                took: ["old took"],
+                default: ["old default"],
+            }),
+        );
+        expect(parsed.took).toEqual(["old took"]);
+        expect(parsed.default).toEqual(["old default"]);
+        expect(messagesSchema.safeParse(parsed).success).toBe(true);
     });
 });
 
@@ -114,6 +226,12 @@ describe("intermission duration", () => {
         expect(resolveIntermissionDuration(4000, 1, 5)).toBe(20000);
         expect(resolveIntermissionDuration(4000, 1, 9)).toBe(36000);
         expect(resolveIntermissionDuration(4000, 1.5, 3)).toBe(18000);
+    });
+
+    test("scales with the material difference multiplier", () => {
+        expect(resolveIntermissionDuration(4000, 1, 1, 2)).toBe(8000);
+        expect(resolveIntermissionDuration(4000, 1, 1, 0.5)).toBe(2000);
+        expect(resolveIntermissionDuration(4000, 1.5, 3, 2)).toBe(36000);
     });
 });
 

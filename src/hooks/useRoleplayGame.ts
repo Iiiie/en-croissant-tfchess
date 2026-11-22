@@ -27,6 +27,8 @@ import {
     playerProfilesAtom,
     primaryColorAtom,
     roleplayBaseDurationAtom,
+    roleplayIntermissionThresholdAtom,
+    roleplayMaterialDurationMultiplierAtom,
     roleplayPulseMinBpmAtom,
     roleplayPulseMaxBpmAtom,
     roleplayEnabledAtom,
@@ -56,9 +58,13 @@ import {
     type IntermissionTrigger,
     formatIntermissionIntro,
     getIntermissionIntro,
+    getMoverMaterialDiff,
+    materialDurationMultiplier,
     pickProfileImage,
     pickProfileMessage,
     resolveIntermissionDuration,
+    type SideOutcome,
+    shouldPlayIntermission,
 } from "@/utils/roleplay";
 import { unwrap } from "@/utils/unwrap";
 
@@ -69,6 +75,8 @@ type ActiveSide = {
     message: string | null;
     durationMs: number;
     severity: number;
+    outcome: SideOutcome;
+    difference: number;
     category: string | null;
     folder: string | null;
     endedAt: number | null;
@@ -146,6 +154,8 @@ export function useRoleplayGame({
     const winIntermissions = useAtomValue(roleplayWinIntermissionsAtom);
     const gameNarrativeMode = useAtomValue(gameNarrativeModeAtom);
     const intermissionDisplay = useAtomValue(intermissionDisplayAtom);
+    const materialThreshold = useAtomValue(roleplayIntermissionThresholdAtom);
+    const materialDurationSetting = useAtomValue(roleplayMaterialDurationMultiplierAtom);
     const baseDuration = useAtomValue(roleplayBaseDurationAtom);
     const pulseMin = useAtomValue(roleplayPulseMinBpmAtom);
     const pulseMax = useAtomValue(roleplayPulseMaxBpmAtom);
@@ -256,6 +266,13 @@ export function useRoleplayGame({
                 return;
             }
 
+            if (!shouldPlayIntermission(trigger.materialDiff, materialThreshold)) {
+                // The backend pauses on every capture/check, so a skipped
+                // intermission must give the clock back.
+                await resumeClock();
+                return;
+            }
+
             const token = Symbol("intermission");
             startingRef.current = token;
 
@@ -292,7 +309,7 @@ export function useRoleplayGame({
                     (intermissionDisplay === "player1"
                         ? player1Side === "black"
                         : player1Side === "white");
-                const whiteIsWin = trigger.moveColor === "white";
+                const whiteIsWin = trigger.outcome.white === "WIN";
                 const showWhite = displayWhite && (winIntermissions || !whiteIsWin);
                 const showBlack = displayBlack && (winIntermissions || whiteIsWin);
 
@@ -302,20 +319,32 @@ export function useRoleplayGame({
                     return;
                 }
 
+                const materialMultiplier = materialDurationMultiplier(
+                    getMoverMaterialDiff(trigger.materialDiff, trigger.moveColor),
+                    materialDurationSetting,
+                );
+                // Vulnerability only scales the player who is receiving the
+                // LOSS intermission; the WIN side uses a neutral 1x.
+                const whiteVulnerability =
+                    trigger.outcome.white === "LOSS" ? record.white.vulnerability : 1;
+                const blackVulnerability =
+                    trigger.outcome.black === "LOSS" ? record.black.vulnerability : 1;
                 const whiteProfile = profiles.find((p) => p.id === record.white.profileId) ?? null;
                 const blackProfile = profiles.find((p) => p.id === record.black.profileId) ?? null;
                 const whiteDuration = showWhite
                     ? resolveIntermissionDuration(
                           baseDuration,
-                          record.white.vulnerability,
+                          whiteVulnerability,
                           trigger.severity,
+                          materialMultiplier,
                       )
                     : 0;
                 const blackDuration = showBlack
                     ? resolveIntermissionDuration(
                           baseDuration,
-                          record.black.vulnerability,
+                          blackVulnerability,
                           trigger.severity,
+                          materialMultiplier,
                       )
                     : 0;
 
@@ -372,6 +401,8 @@ export function useRoleplayGame({
                         message: whiteMessage.message,
                         durationMs: whiteDuration,
                         severity: trigger.severity,
+                        outcome: trigger.outcome.white,
+                        difference: trigger.magnitude,
                         category: whiteImage.category,
                         folder: whiteImage.folder,
                     },
@@ -382,6 +413,8 @@ export function useRoleplayGame({
                         message: blackMessage.message,
                         durationMs: blackDuration,
                         severity: trigger.severity,
+                        outcome: trigger.outcome.black,
+                        difference: trigger.magnitude,
                         category: blackImage.category,
                         folder: blackImage.folder,
                     },
@@ -404,6 +437,7 @@ export function useRoleplayGame({
                     kind: trigger.kind,
                     san: trigger.san,
                     ply: trigger.ply,
+                    materialDiff: trigger.materialDiff,
                     show: { white: showWhite, black: showBlack },
                     sides,
                 };
@@ -421,12 +455,15 @@ export function useRoleplayGame({
                         startedAt,
                         endedAt: null,
                         severity: trigger.severity,
+                        materialDiff: trigger.materialDiff,
                         white: {
                             profileId: record.white.profileId,
                             profileName: record.white.name,
                             image: whiteImage.path,
                             message: whiteMessage.message,
                             durationMs: whiteDuration,
+                            outcome: trigger.outcome.white,
+                            difference: trigger.magnitude,
                             endedAt: showWhite ? null : startedAt,
                             reason: showWhite ? null : "skipped",
                         },
@@ -436,6 +473,8 @@ export function useRoleplayGame({
                             image: blackImage.path,
                             message: blackMessage.message,
                             durationMs: blackDuration,
+                            outcome: trigger.outcome.black,
+                            difference: trigger.magnitude,
                             endedAt: showBlack ? null : startedAt,
                             reason: showBlack ? null : "skipped",
                         },
@@ -447,6 +486,8 @@ export function useRoleplayGame({
                         message: whiteMessage.message,
                         durationMs: whiteDuration,
                         severity: trigger.severity,
+                        outcome: trigger.outcome.white,
+                        difference: trigger.magnitude,
                         category: whiteImage.category,
                         folder: whiteImage.folder,
                         endedAt: showWhite ? null : startedAt,
@@ -459,6 +500,8 @@ export function useRoleplayGame({
                         message: blackMessage.message,
                         durationMs: blackDuration,
                         severity: trigger.severity,
+                        outcome: trigger.outcome.black,
+                        difference: trigger.magnitude,
                         category: blackImage.category,
                         folder: blackImage.folder,
                         endedAt: showBlack ? null : startedAt,
@@ -479,6 +522,7 @@ export function useRoleplayGame({
 
                 clearWatchdog();
                 const maxDuration = Math.max(whiteDuration, blackDuration);
+                const watchdogDelay = Math.min(maxDuration + 12_000, 2_147_483_647);
                 watchdogRef.current = setTimeout(() => {
                     for (let i = 0; i < 2; i++) {
                         const current = activeRef.current;
@@ -496,7 +540,7 @@ export function useRoleplayGame({
                         }
                         completeSide(current, side, "failed");
                     }
-                }, maxDuration + 12000);
+                }, watchdogDelay);
             } catch (error) {
                 // Any intermission failure must never leave the game paused or
                 // end the match; just log it and resume the clock.
@@ -515,6 +559,9 @@ export function useRoleplayGame({
             pulseMin,
             pulseMax,
             intermissionDisplay,
+            winIntermissions,
+            materialThreshold,
+            materialDurationSetting,
             primaryColor,
             fontSize,
             profiles,

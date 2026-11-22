@@ -56,6 +56,8 @@ import {
   flipBoardAfterMoveAtom,
   roleplayBaseDurationAtom,
   roleplayEnabledAtom,
+  roleplayIntermissionThresholdAtom,
+  roleplayMaterialDurationMultiplierAtom,
   roleplayPulseMinBpmAtom,
   roleplayPulseMaxBpmAtom,
   roleplayWinIntermissionsAtom,
@@ -146,12 +148,16 @@ function NumberSetting({
   suffix,
   step,
   decimalScale,
+  min,
+  max,
 }: {
   value: number;
   onChange: (value: number) => void;
   suffix?: string;
   step?: number;
   decimalScale?: number;
+  min?: number;
+  max?: number;
 }) {
   const [draft, setDraft] = useState<string | number>(value);
 
@@ -162,7 +168,9 @@ function NumberSetting({
   const commit = () => {
     const parsed = typeof draft === "number" ? draft : Number.parseFloat(draft);
     if (Number.isFinite(parsed)) {
-      onChange(parsed);
+      const clamped = Math.min(max ?? Number.POSITIVE_INFINITY, Math.max(min ?? 0, parsed));
+      onChange(clamped);
+      setDraft(clamped);
     } else {
       setDraft(value);
     }
@@ -183,6 +191,8 @@ function NumberSetting({
       suffix={suffix}
       step={step}
       decimalScale={decimalScale}
+      min={min}
+      max={max}
     />
   );
 }
@@ -247,6 +257,10 @@ export default function Page() {
   const [winIntermissions, setWinIntermissions] = useAtom(roleplayWinIntermissionsAtom);
   const [narrativeMode, setNarrativeMode] = useAtom(gameNarrativeModeAtom);
   const [intermissionDisplay, setIntermissionDisplay] = useAtom(intermissionDisplayAtom);
+  const [materialThreshold, setMaterialThreshold] = useAtom(roleplayIntermissionThresholdAtom);
+  const [materialDurationMultiplier, setMaterialDurationMultiplier] = useAtom(
+    roleplayMaterialDurationMultiplierAtom,
+  );
 
   const [moveMethod, setMoveMethod] = useAtom(moveMethodAtom);
   const [pieceAnimation, setPieceAnimation] = useAtom(pieceAnimationAtom);
@@ -826,6 +840,40 @@ export default function Page() {
         ),
       },
       {
+        id: "roleplay-material-threshold",
+        category: "roleplay",
+        title: t("Settings.Roleplay.MaterialThreshold"),
+        description: t("Settings.Roleplay.MaterialThreshold.Desc"),
+        keywords: ["roleplay", "intermission", "material", "threshold", "difference"],
+        render: () => (
+          <NumberSetting
+            value={materialThreshold}
+            onChange={setMaterialThreshold}
+            min={0}
+            max={103}
+            step={1}
+            suffix=" pts"
+          />
+        ),
+      },
+      {
+        id: "roleplay-material-multiplier",
+        category: "roleplay",
+        title: t("Settings.Roleplay.MaterialMultiplier"),
+        description: t("Settings.Roleplay.MaterialMultiplier.Desc"),
+        keywords: ["roleplay", "intermission", "material", "duration", "multiplier"],
+        render: () => (
+          <NumberSetting
+            value={materialDurationMultiplier}
+            onChange={setMaterialDurationMultiplier}
+            min={0}
+            step={0.1}
+            decimalScale={2}
+            suffix="x"
+          />
+        ),
+      },
+      {
         id: "roleplay-pulse-min",
         category: "roleplay",
         title: t("Settings.Roleplay.PulseMin"),
@@ -858,7 +906,7 @@ export default function Page() {
             allowDeselect={false}
             value={intermissionDisplay}
             onChange={(value) =>
-              setIntermissionDisplay((value as "both" | "player1" | "player2") ?? "both")
+              setIntermissionDisplay((value as "both" | "player1" | "player2") ?? "player1")
             }
           />
         ),
@@ -908,6 +956,8 @@ export default function Page() {
       winIntermissions,
       narrativeMode,
       intermissionDisplay,
+      materialThreshold,
+      materialDurationMultiplier,
       setMoveNotationType,
       setMoveMethod,
       setIsNative,
@@ -923,6 +973,8 @@ export default function Page() {
       setWinIntermissions,
       setNarrativeMode,
       setIntermissionDisplay,
+      setMaterialThreshold,
+      setMaterialDurationMultiplier,
       setShowCoordinates,
       setMaterialDisplay,
       defaultPanelTab,

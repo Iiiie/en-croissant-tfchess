@@ -1,4 +1,14 @@
-import { Button, Card, Group, Loader, Select, SimpleGrid, Stack, Text } from "@mantine/core";
+import {
+  Button,
+  Card,
+  Group,
+  Loader,
+  Select,
+  SimpleGrid,
+  Stack,
+  Text,
+  TextInput,
+} from "@mantine/core";
 import { IconCopy, IconPhotoPlus } from "@tabler/icons-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
@@ -10,26 +20,34 @@ import {
   getProfileImagesDir,
   IMAGE_CATEGORIES,
   type ImageCategory,
+  isOutcomeCategory,
   listProfileImages,
   PIECE_ROLES,
   type PieceRole,
   type PlayerProfile,
 } from "@/utils/playerProfile";
 import { copyFolderPath } from "@/utils/openFolder";
+import { parseDifferenceRange } from "@/utils/roleplay";
 
 export default function ProfileImages({ profile }: { profile: PlayerProfile }) {
   const { t } = useTranslation();
-  const [category, setCategory] = useState<ImageCategory>("default");
+  const [category, setCategory] = useState<ImageCategory>("LOSS");
   const [role, setRole] = useState<PieceRole | null>(null);
+  const [range, setRange] = useState("");
+  const normalizedRange = range.trim();
+  const rangeValid = !normalizedRange || !!parseDifferenceRange(normalizedRange);
   const {
     data: images = [],
     isLoading: loading,
     mutate,
-  } = useSWR(["profile-images", profile.id, category, role], () =>
-    listProfileImages(profile.id, category, role),
+  } = useSWR(["profile-images", profile.id, category, role, normalizedRange], () =>
+    listProfileImages(profile.id, category, role, normalizedRange || null),
   );
 
   const addImage = async () => {
+    if (!rangeValid) {
+      return;
+    }
     const selected = await open({
       multiple: false,
       filters: [
@@ -56,18 +74,20 @@ export default function ProfileImages({ profile }: { profile: PlayerProfile }) {
     if (typeof selected !== "string") {
       return;
     }
+    const outcomeCategory = isOutcomeCategory(category);
     await addImageToProfile({
       profileId: profile.id,
       sourcePath: selected,
       category,
-      role,
+      role: outcomeCategory ? role : null,
+      subfolder: outcomeCategory && normalizedRange ? normalizedRange : null,
     });
     await mutate();
   };
 
   return (
     <Stack>
-      <Group>
+      <Group align="flex-end">
         <Select
           label={t("Players.Category")}
           data={IMAGE_CATEGORIES.map((item) => ({
@@ -75,9 +95,16 @@ export default function ProfileImages({ profile }: { profile: PlayerProfile }) {
             label: t(`Players.Category.${item}`),
           }))}
           value={category}
-          onChange={(value) => setCategory((value as ImageCategory) ?? "default")}
+          onChange={(value) => {
+            const next = (value as ImageCategory) ?? "LOSS";
+            setCategory(next);
+            if (!isOutcomeCategory(next)) {
+              setRole(null);
+              setRange("");
+            }
+          }}
         />
-        {(category === "took" || category === "lost") && (
+        {isOutcomeCategory(category) && (
           <Select
             label={t("Players.Piece")}
             data={PIECE_ROLES.map((item) => ({
@@ -90,13 +117,39 @@ export default function ProfileImages({ profile }: { profile: PlayerProfile }) {
             placeholder={t("Players.AllPieces")}
           />
         )}
-        <Button leftSection={<IconPhotoPlus size="1rem" />} onClick={() => void addImage()}>
+        {isOutcomeCategory(category) && (
+          <TextInput
+            label={t("Players.DifferenceRange")}
+            placeholder={t("Players.DifferenceRange.Placeholder")}
+            value={range}
+            onChange={(event) => setRange(event.currentTarget.value)}
+            error={
+              normalizedRange && !parseDifferenceRange(normalizedRange)
+                ? t("Players.DifferenceRange.Invalid")
+                : undefined
+            }
+          />
+        )}
+        <Button
+          leftSection={<IconPhotoPlus size="1rem" />}
+          onClick={() => void addImage()}
+          disabled={!rangeValid}
+        >
           {t("Players.AddImage")}
         </Button>
         <Button
           variant="default"
           leftSection={<IconCopy size="1rem" />}
-          onClick={() => void copyFolderPath(getProfileImagesDir(profile.id, category, role))}
+          onClick={() =>
+            void copyFolderPath(
+              getProfileImagesDir(
+                profile.id,
+                category,
+                isOutcomeCategory(category) ? role : null,
+                isOutcomeCategory(category) && normalizedRange ? normalizedRange : null,
+              ),
+            )
+          }
         >
           {t("Common.CopyFolderPath")}
         </Button>

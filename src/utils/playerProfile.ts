@@ -13,8 +13,21 @@ import type { Outcome } from "@/bindings";
 import { engineSettingsSchema, goModeSchema } from "@/utils/engines";
 import { getPlayersDir } from "@/utils/directories";
 
-export const IMAGE_CATEGORIES = ["took", "lost", "check", "checked", "default"] as const;
-export type ImageCategory = (typeof IMAGE_CATEGORIES)[number];
+export const OUTCOME_CATEGORIES = ["WIN", "LOSS"] as const;
+export type OutcomeCategory = (typeof OUTCOME_CATEGORIES)[number];
+
+export const IMAGE_CATEGORIES = ["WIN", "LOSS", "default"] as const;
+
+/** Categories used by the old capture/check based intermission system. */
+export const LEGACY_IMAGE_CATEGORIES = ["took", "lost", "check", "checked"] as const;
+
+export type ImageCategory =
+    | (typeof IMAGE_CATEGORIES)[number]
+    | (typeof LEGACY_IMAGE_CATEGORIES)[number];
+
+export function isOutcomeCategory(category: string): category is OutcomeCategory {
+    return category === "WIN" || category === "LOSS";
+}
 
 export const PIECE_ROLES = ["pawn", "knight", "bishop", "rook", "queen"] as const;
 export type PieceRole = (typeof PIECE_ROLES)[number];
@@ -64,7 +77,13 @@ export const playerProfileSchema = z.object({
 });
 export type PlayerProfile = z.infer<typeof playerProfileSchema>;
 
+export const differenceMessagesSchema = z.record(z.array(z.string())).catch({}).default({});
+export type DifferenceMessages = z.infer<typeof differenceMessagesSchema>;
+
 export const messagesSchema = z.object({
+    WIN: differenceMessagesSchema,
+    LOSS: differenceMessagesSchema,
+    // Legacy keys kept so existing messages.json files keep working.
     took: z.array(z.string()).default([]),
     lost: z.array(z.string()).default([]),
     check: z.array(z.string()).default([]),
@@ -74,12 +93,61 @@ export const messagesSchema = z.object({
 export type PlayerMessages = z.infer<typeof messagesSchema>;
 
 export const EMPTY_MESSAGES: PlayerMessages = {
+    WIN: {},
+    LOSS: {},
     took: [],
     lost: [],
     check: [],
     checked: [],
     default: [],
 };
+
+/**
+ * JSON has no comment syntax. This reserved key is ignored by the parser and
+ * re-added by the writer so every messages.json contains a tiered example.
+ */
+export const MESSAGES_EXAMPLE = {
+    WIN: {
+        "0": ["Example win message for a tied material position."],
+        "5": ["Example win message for a 5-point material lead."],
+        "12": ["Example win message for a 12-point material lead."],
+    },
+    LOSS: {
+        "0": ["Example loss message for a tied material position."],
+        "5": ["Example loss message for a 5-point material deficit."],
+        "12": ["Example loss message for a 12-point material deficit."],
+    },
+} as const;
+
+type MessagesFileShape = {
+    "//": typeof MESSAGES_EXAMPLE;
+    WIN: DifferenceMessages;
+    LOSS: DifferenceMessages;
+    took?: string[];
+    lost?: string[];
+    check?: string[];
+    checked?: string[];
+    default?: string[];
+};
+
+export function serializeMessagesFile(messages: PlayerMessages): string {
+    const file: MessagesFileShape = {
+        "//": MESSAGES_EXAMPLE,
+        WIN: messages.WIN,
+        LOSS: messages.LOSS,
+    };
+
+    for (const category of LEGACY_IMAGE_CATEGORIES) {
+        if (messages[category].length > 0) {
+            file[category] = messages[category];
+        }
+    }
+    if (messages.default.length > 0) {
+        file.default = messages.default;
+    }
+
+    return JSON.stringify(file, null, 2);
+}
 
 export type IntermissionEndReason =
     | "timeout"
@@ -97,6 +165,8 @@ const intermissionSideSchema = z.object({
     image: z.string().nullable(),
     message: z.string().nullable(),
     durationMs: z.number(),
+    outcome: z.enum(["WIN", "LOSS"]).default("LOSS"),
+    difference: z.number().default(0),
     endedAt: z.number().nullable(),
     reason: z.enum(["timeout", "closed", "minimized", "failed", "cancelled", "skipped"]).nullable(),
 });
@@ -109,6 +179,7 @@ const intermissionRecordSchema = z.object({
     startedAt: z.number(),
     endedAt: z.number().nullable(),
     severity: z.number().default(1),
+    materialDiff: z.number().default(0),
     white: intermissionSideSchema,
     black: intermissionSideSchema,
 });
@@ -335,11 +406,17 @@ export async function getProfileImagesDir(
     profileId: string,
     category: ImageCategory,
     role?: PieceRole | null,
+    subfolder?: string | null,
 ): Promise<string> {
     const profileDir = await getProfileDir(profileId);
-    return role
-        ? resolve(profileDir, "images", category, role)
-        : resolve(profileDir, "images", category);
+    const parts = ["images", category];
+    if (subfolder) {
+        parts.push(subfolder);
+    }
+    if (role) {
+        parts.push(role);
+    }
+    return resolve(profileDir, ...parts);
 }
 
 export async function getProfileMessagesPath(profileId: string): Promise<string> {
@@ -376,11 +453,17 @@ export async function getArchetypeImagesDir(
     archetypeId: string,
     category: ImageCategory,
     role?: PieceRole | null,
+    subfolder?: string | null,
 ): Promise<string> {
     const archetypeDir = await getArchetypeDir(archetypeId);
-    return role
-        ? resolve(archetypeDir, "images", category, role)
-        : resolve(archetypeDir, "images", category);
+    const parts = ["images", category];
+    if (subfolder) {
+        parts.push(subfolder);
+    }
+    if (role) {
+        parts.push(role);
+    }
+    return resolve(archetypeDir, ...parts);
 }
 
 export async function getArchetypeMessagesPath(archetypeId: string): Promise<string> {
@@ -409,16 +492,21 @@ export async function ensureArchetypeStorage(archetype: Archetype): Promise<void
 
     const messagesPath = await getArchetypeMessagesPath(archetype.id);
     if (!(await exists(messagesPath))) {
-        await writeTextFile(messagesPath, JSON.stringify(EMPTY_MESSAGES, null, 2));
+        await writeTextFile(messagesPath, serializeMessagesFile(EMPTY_MESSAGES));
     }
 
     const content = [
         `Archetype: ${archetype.name}`,
         `Id: ${archetype.id}`,
         "",
-        "Images: images/<took|lost|check|checked|default>/",
-        "  optional piece subfolders under took/ and lost/: pawn, knight, bishop, rook, queen",
-        "Messages: messages.json",
+        "Images: images/<WIN|LOSS|default>/",
+        "  optional subfolders under WIN/ and LOSS/:",
+        "    - difference ranges, e.g. 1-11, 5, 12+",
+        "    - piece names: pawn, knight, bishop, rook, queen",
+        "    - check",
+        "Messages: messages.json (WIN/LOSS lists keyed by material difference)",
+        '  e.g. { "WIN": { "0": ["..."] }, "LOSS": { "0": ["..."], "12": ["..."] } }',
+        '  The reserved "//" key is ignored by the app and safe to delete.',
     ].join("\n");
     await writeTextFile(await getArchetypeReadmePath(archetype.id), content);
 }
@@ -447,9 +535,14 @@ export async function writeProfileReadme(profile: PlayerProfile): Promise<void> 
         `Elo: ${profile.elo}`,
         `Archetypes: ${profile.archetypeIds.join(", ") || "none"}`,
         "",
-        "Images: images/<took|lost|check|checked|default>/",
-        "  optional piece subfolders under took/ and lost/: pawn, knight, bishop, rook, queen",
-        "Messages: messages.json",
+        "Images: images/<WIN|LOSS|default>/",
+        "  optional subfolders under WIN/ and LOSS/:",
+        "    - difference ranges, e.g. 1-11, 5, 12+",
+        "    - piece names: pawn, knight, bishop, rook, queen",
+        "    - check",
+        "Messages: messages.json (WIN/LOSS lists keyed by material difference)",
+        '  e.g. { "WIN": { "0": ["..."] }, "LOSS": { "0": ["..."], "12": ["..."] } }',
+        '  The reserved "//" key is ignored by the app and safe to delete.',
         "History: history.json",
     ].join("\n");
     await writeTextFile(await getProfileReadmePath(profile.id), content);
@@ -462,7 +555,7 @@ export async function ensureProfileStorage(profile: PlayerProfile): Promise<void
 
     const messagesPath = await getProfileMessagesPath(profile.id);
     if (!(await exists(messagesPath))) {
-        await writeTextFile(messagesPath, JSON.stringify(EMPTY_MESSAGES, null, 2));
+        await writeTextFile(messagesPath, serializeMessagesFile(EMPTY_MESSAGES));
     }
 
     const historyPath = await getProfileHistoryPath(profile.id);
@@ -537,9 +630,12 @@ export async function writePlayersReadme(
         ...archetypeRows,
         "",
         "Each player/archetype folder contains:",
-        "- `images/took/`, `images/lost/`, `images/check/`, `images/checked/`, `images/default/`",
-        "  (optional piece subfolders under `took/` and `lost/`: pawn, knight, bishop, rook, queen)",
-        "- `messages.json` — one message per line in the app",
+        "- `images/WIN/`, `images/LOSS/`, `images/default/`",
+        "- optional subfolders under `WIN/` and `LOSS/`: difference ranges like `1-11`, piece names, or `check`",
+        "  e.g. `images/WIN/1-11/queen/`",
+        "- `messages.json` — `WIN`/`LOSS` message lists keyed by material difference",
+        '  e.g. `{ "WIN": { "0": ["..."] }, "LOSS": { "0": ["..."], "12": ["..."] } }`',
+        '  The reserved `"//"` key is ignored by the app and safe to delete.',
         "- `history.json` — games played with this profile",
         "",
         "Supported media: png, jpg, jpeg, gif, webp, avif, bmp, svg, webm, mp4, m4v, mov, ogv.",
@@ -574,7 +670,7 @@ export async function writeProfileMessages(
     messages: PlayerMessages,
 ): Promise<void> {
     const path = await getProfileMessagesPath(profileId);
-    await writeTextFile(path, JSON.stringify(messages, null, 2));
+    await writeTextFile(path, serializeMessagesFile(messages));
 }
 
 export async function readProfileHistory(profileId: string): Promise<ProfileGameRecord[]> {
@@ -641,12 +737,38 @@ export async function listImagesInDir(
     }
 }
 
+export async function listSubdirectories(dir: string): Promise<string[]> {
+    try {
+        if (!(await exists(dir))) {
+            return [];
+        }
+        const entries = await readDir(dir);
+        return entries
+            .filter((entry) => entry.isDirectory)
+            .map((entry) => entry.name)
+            .sort();
+    } catch {
+        // Missing or unreadable folders are treated as empty folders.
+        return [];
+    }
+}
+
 export async function listProfileImages(
     profileId: string,
     category: ImageCategory,
     role?: PieceRole | null,
+    subfolder?: string | null,
 ): Promise<string[]> {
     const candidateDirs: string[] = [];
+    if (subfolder && role) {
+        candidateDirs.push(await getProfileImagesDir(profileId, category, role, subfolder));
+        candidateDirs.push(
+            await resolve(await getProfileImagesDir(profileId, category, role), subfolder),
+        );
+    }
+    if (subfolder) {
+        candidateDirs.push(await getProfileImagesDir(profileId, category, null, subfolder));
+    }
     if (role) {
         candidateDirs.push(await getProfileImagesDir(profileId, category, role));
     }
@@ -666,8 +788,18 @@ export async function listArchetypeImages(
     archetypeId: string,
     category: ImageCategory,
     role?: PieceRole | null,
+    subfolder?: string | null,
 ): Promise<string[]> {
     const candidateDirs: string[] = [];
+    if (subfolder && role) {
+        candidateDirs.push(await getArchetypeImagesDir(archetypeId, category, role, subfolder));
+        candidateDirs.push(
+            await resolve(await getArchetypeImagesDir(archetypeId, category, role), subfolder),
+        );
+    }
+    if (subfolder) {
+        candidateDirs.push(await getArchetypeImagesDir(archetypeId, category, null, subfolder));
+    }
     if (role) {
         candidateDirs.push(await getArchetypeImagesDir(archetypeId, category, role));
     }
@@ -688,10 +820,14 @@ export async function addImageToProfile(args: {
     sourcePath: string;
     category: ImageCategory;
     role?: PieceRole | null;
+    subfolder?: string | null;
 }): Promise<string> {
-    const dir = args.role
-        ? await getProfileImagesDir(args.profileId, args.category, args.role)
-        : await getProfileImagesDir(args.profileId, args.category);
+    const dir = await getProfileImagesDir(
+        args.profileId,
+        args.category,
+        args.role ?? null,
+        args.subfolder ?? null,
+    );
     await mkdir(dir, { recursive: true });
 
     const filename = args.sourcePath.split(/[\\/]/).pop() ?? `image-${Date.now()}.png`;
@@ -705,7 +841,15 @@ export async function getProfileAvatar(profile: PlayerProfile): Promise<string |
         return profile.avatar;
     }
 
-    for (const category of ["default", "took", "lost", "check", "checked"] as const) {
+    for (const category of [
+        "default",
+        "WIN",
+        "LOSS",
+        "took",
+        "lost",
+        "check",
+        "checked",
+    ] as const) {
         const dirs = [await getProfileImagesDir(profile.id, category)];
         for (const archetypeId of profile.archetypeIds) {
             dirs.push(await getArchetypeImagesDir(archetypeId, category));

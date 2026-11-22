@@ -14,6 +14,8 @@ export type IntermissionSidePayload = {
     message: string | null;
     durationMs: number;
     severity: number;
+    outcome?: "WIN" | "LOSS";
+    difference?: number;
     category: string | null;
     folder: string | null;
 };
@@ -28,6 +30,7 @@ export type IntermissionPayload = {
     kind: "capture" | "check";
     san: string;
     ply: number;
+    materialDiff?: number;
     show: { white: boolean; black: boolean };
     sides: { white: IntermissionSidePayload; black: IntermissionSidePayload };
 };

@@ -267,7 +267,7 @@ export const roleplayPulseMaxBpmAtom = atomWithStorage<number>(
 );
 export const intermissionDisplayAtom = atomWithStorage<"both" | "player1" | "player2">(
     "intermission-display",
-    "both",
+    "player1",
     undefined,
     { getOnInit: true },
 );
@@ -276,7 +276,19 @@ export const roleplayEnabledAtom = atomWithStorage<boolean>("roleplay-enabled", 
 });
 export const roleplayWinIntermissionsAtom = atomWithStorage<boolean>(
     "roleplay-win-intermissions",
-    true,
+    false,
+    undefined,
+    { getOnInit: true },
+);
+export const roleplayIntermissionThresholdAtom = atomWithStorage<number>(
+    "roleplay-intermission-threshold",
+    0,
+    undefined,
+    { getOnInit: true },
+);
+export const roleplayMaterialDurationMultiplierAtom = atomWithStorage<number>(
+    "roleplay-material-duration-multiplier",
+    0,
     undefined,
     { getOnInit: true },
 );
