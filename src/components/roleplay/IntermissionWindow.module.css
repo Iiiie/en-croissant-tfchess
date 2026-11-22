@@ -1,0 +1,152 @@
+.root {
+  position: fixed;
+  inset: 0;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: #000;
+  transition: opacity 3s ease;
+}
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.72);
+  padding: 2rem;
+  pointer-events: none;
+}
+
+.introText {
+  max-width: 80vw;
+  text-align: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: clamp(2rem, 5vw, 4.5rem);
+  line-height: 1.15;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.9);
+}
+
+.dotWrap {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #ff4fa3;
+  box-shadow: 0 0 28px #ff4fa3;
+  animation: dotPulse var(--dot-duration, 0.6s) ease-in-out infinite;
+}
+
+.halves {
+  display: flex;
+  height: 100%;
+  width: 100%;
+}
+
+.half {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+
+.half + .half {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.mediaFallback {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 30%, #1f2024, #000 70%);
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.92) 0%,
+    rgba(0, 0, 0, 0.35) 45%,
+    rgba(0, 0, 0, 0.05) 75%
+  );
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: clamp(1rem, 2.5vw, 2.5rem);
+  gap: 0.5rem;
+}
+
+.title {
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.8);
+}
+
+.message {
+  white-space: pre-wrap;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
+}
+
+.folderHint {
+  word-break: break-all;
+}
+
+.waiting {
+  height: 100%;
+}
+
+.close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 3;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+}
+
+@keyframes dotPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot {
+    animation: none;
+  }
+}

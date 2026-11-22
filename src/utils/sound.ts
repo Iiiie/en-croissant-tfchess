@@ -22,6 +22,11 @@ function isLinux(): boolean {
 
 let lastTime = 0;
 
+export function playTick() {
+    // Reuse the move sound as the intermission metronome tick.
+    playSound(false, false);
+}
+
 async function getSoundServerPort(): Promise<number> {
     if (soundServerPort !== null) {
         return soundServerPort;

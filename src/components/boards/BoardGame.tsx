@@ -14,9 +14,13 @@ import {
   Text,
 } from "@mantine/core";
 import { useToggle } from "@mantine/hooks";
+import { notifications } from "@mantine/notifications";
 import {
   IconArrowsExchange,
   IconFileText,
+  IconMessage,
+  IconPlayerPause,
+  IconPlayerPlay,
   IconPlus,
   IconX,
   IconZoomCheck,
@@ -50,12 +54,16 @@ import {
   gameOpeningBookEnabledAtom,
   gameOpeningBookMaxPlyAtom,
   gameOpeningBookPathAtom,
+  gameNarrativeModeAtom,
   gamePlayer1SettingsAtom,
   gamePlayer2SettingsAtom,
   gameSameTimeControlAtom,
+  roleplayEnabledAtom,
   tabsAtom,
 } from "@/state/atoms";
+import { useRoleplayGame } from "@/hooks/useRoleplayGame";
 import { positionFromFen } from "@/utils/chessops";
+import { clearGameSession, readGameSession, saveGameSession } from "@/utils/gameSession";
 import type { GameHeaders } from "@/utils/treeReducer";
 import { unwrap } from "@/utils/unwrap";
 import EngineLogsView from "../common/EngineLogsView";
@@ -68,6 +76,9 @@ import Board from "./Board";
 import BoardControls from "./BoardControls";
 import EditingCard from "./EditingCard";
 import { OpponentForm, type OpponentSettings } from "./OpponentForm";
+import ChatDrawer from "../roleplay/ChatDrawer";
+import IntermissionStatus from "../roleplay/IntermissionStatus";
+import { IntermissionOverlay } from "../roleplay/IntermissionWindow";
 
 function gameResultToOutcome(result: GameResult): Outcome {
   if (result.type === "whiteWins") return "1-0";
@@ -138,6 +149,22 @@ function BoardGame() {
   const [whiteTime, setWhiteTime] = useState<number | null>(null);
   const [blackTime, setBlackTime] = useState<number | null>(null);
   const [gameId, setGameId] = useAtom(currentGameIdAtom);
+  const roleplay = useRoleplayGame({
+    gameId,
+    gameState,
+    setWhiteTime,
+    setBlackTime,
+  });
+  const {
+    handleMove: handleRoleplayMove,
+    handleGameOver: handleRoleplayGameOver,
+    setPaused: setRoleplayPaused,
+  } = roleplay;
+  const [chatOpen, setChatOpen] = useState(false);
+  const [narrativeMode, setNarrativeMode] = useAtom(gameNarrativeModeAtom);
+  const roleplayEnabled = useAtomValue(roleplayEnabledAtom);
+  // `narrativeMode`/`roleplayEnabled` are also sent to the backend so it can
+  // pause on captures/checks before the next move.
 
   const [logsOpened, toggleLogsOpened] = useToggle();
   const [logsColor, setLogsColor] = useState<"white" | "black">("white");
@@ -258,7 +285,7 @@ function BoardGame() {
     }
     return {
       type: "engine",
-      name: settings.engine?.name ?? "Engine",
+      name: settings.name ?? settings.engine?.name ?? "Engine",
       path: settings.engine?.path ?? "",
       options: (settings.engineSettings ?? settings.engine?.settings ?? [])
         .filter((s) => s.name !== "MultiPV")
@@ -317,6 +344,7 @@ function BoardGame() {
         openingBookEnabled && openingBookPath
           ? { path: openingBookPath, maxPly: Math.max(1, openingBookMaxPly) }
           : null,
+      narrative: roleplayEnabled && narrativeMode,
     } as GameConfig;
 
     try {
@@ -406,6 +434,13 @@ function BoardGame() {
             : tab,
         ),
       );
+
+      const player1Side: "white" | "black" =
+        playerSettings.white === player1Settings ? "white" : "black";
+      const record = roleplay.beginGame(playerSettings, state, player1Side);
+      if (activeTab) {
+        saveGameSession(activeTab, { gameId: newGameId, record });
+      }
     } catch (err) {
       console.error("Failed to start game:", err);
     }
@@ -413,14 +448,14 @@ function BoardGame() {
 
   const handleHumanMove = useCallback(
     async (uci: string) => {
-      if (!gameId || gameState !== "playing") return;
+      if (!gameId || gameState !== "playing" || roleplay.isPaused) return;
       try {
         await commands.makeGameMove(gameId, uci);
       } catch (err) {
         console.error("Failed to make move:", err);
       }
     },
-    [gameId, gameState],
+    [gameId, gameState, roleplay.isPaused],
   );
 
   const pendingMovesRef = useRef<{ uci: string; clock: number | null }[] | null>(null);
@@ -433,6 +468,57 @@ function BoardGame() {
 
   const syncTreeWithMovesRef = useRef(syncTreeWithMoves);
   syncTreeWithMovesRef.current = syncTreeWithMoves;
+
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || !activeTab) {
+      return;
+    }
+    restoredRef.current = true;
+
+    const session = readGameSession(activeTab);
+    if (!session) {
+      return;
+    }
+
+    void (async () => {
+      const result = await commands.getGameState(session.gameId);
+      if (result.status !== "ok") {
+        clearGameSession(activeTab);
+        return;
+      }
+
+      const state = result.data;
+      setGameId(session.gameId);
+      setFen(state.initialFen);
+      syncTreeWithMovesRef.current(mapBackendMoves(state.moves));
+      setWhiteTime(state.whiteTime !== null ? Number(state.whiteTime) : null);
+      setBlackTime(state.blackTime !== null ? Number(state.blackTime) : null);
+      roleplay.restoreGame(session.record, state);
+
+      if (state.status === "playing") {
+        setGameState("playing");
+        return;
+      }
+
+      setGameState("gameOver");
+      if (typeof state.status === "object" && "finished" in state.status) {
+        setResult(gameResultToOutcome(state.status.finished.result));
+        void handleRoleplayGameOver(state.status.finished.result);
+      }
+      clearGameSession(activeTab);
+    })();
+  }, [
+    activeTab,
+    handleRoleplayGameOver,
+    roleplay.restoreGame,
+    setBlackTime,
+    setFen,
+    setGameId,
+    setGameState,
+    setResult,
+    setWhiteTime,
+  ]);
 
   const applyPendingUpdates = useCallback(() => {
     if (pendingMovesRef.current) {
@@ -458,9 +544,9 @@ function BoardGame() {
   }, [applyPendingUpdates]);
 
   const onTakeBack = useCallback(async () => {
-    if (!gameId || gameState !== "playing") return;
+    if (!gameId || gameState !== "playing" || roleplay.isPaused) return;
     const result = await commands.takeBackGameMove(gameId, null);
-  }, [gameId, gameState]);
+  }, [gameId, gameState, roleplay.isPaused]);
 
   useEffect(() => {
     if (gameState !== "playing" || !gameId) return;
@@ -476,6 +562,13 @@ function BoardGame() {
         black: payload.blackTime !== null ? Number(payload.blackTime) : null,
       };
       scheduleUpdate();
+      handleRoleplayMove(payload);
+      if (activeTab && roleplay.gameRecord) {
+        saveGameSession(activeTab, {
+          gameId: currentGameId,
+          record: roleplay.gameRecord,
+        });
+      }
     });
 
     const unlistenClock = events.clockUpdateEvent.listen(({ payload }) => {
@@ -498,6 +591,22 @@ function BoardGame() {
 
       setGameState("gameOver");
       setResult(gameResultToOutcome(payload.result));
+      void handleRoleplayGameOver(payload.result);
+      if (activeTab) {
+        clearGameSession(activeTab);
+      }
+    });
+
+    const unlistenError = events.gameErrorEvent.listen(({ payload }) => {
+      if (payload.gameId !== currentGameId) return;
+
+      notifications.show({
+        color: "red",
+        title: t("Board.EngineError"),
+        message: payload.message,
+        autoClose: 10000,
+      });
+      roleplay.setPaused(true);
     });
 
     return () => {
@@ -508,8 +617,21 @@ function BoardGame() {
       unlistenMove.then((f) => f());
       unlistenClock.then((f) => f());
       unlistenGameOver.then((f) => f());
+      unlistenError.then((f) => f());
     };
-  }, [gameId, gameState, scheduleUpdate, setGameState, setResult]);
+  }, [
+    activeTab,
+    gameId,
+    gameState,
+    scheduleUpdate,
+    setGameState,
+    setResult,
+    handleRoleplayMove,
+    handleRoleplayGameOver,
+    roleplay.gameRecord,
+    roleplay.setPaused,
+    t,
+  ]);
 
   useEffect(() => {
     if (gameState === "playing" && gameId) {
@@ -521,17 +643,19 @@ function BoardGame() {
 
           setWhiteTime(state.whiteTime !== null ? Number(state.whiteTime) : null);
           setBlackTime(state.blackTime !== null ? Number(state.blackTime) : null);
+          setRoleplayPaused(state.paused);
 
           if (state.status !== "playing") {
             setGameState("gameOver");
             if (typeof state.status === "object" && "finished" in state.status) {
               setResult(gameResultToOutcome(state.status.finished.result));
+              void handleRoleplayGameOver(state.status.finished.result);
             }
           }
         }
       });
     }
-  }, [gameId, gameState, setGameState, setResult]);
+  }, [gameId, gameState, setGameState, setResult, setRoleplayPaused, handleRoleplayGameOver]);
 
   const movable = useMemo(() => {
     if (players.white.type === "human" && players.black.type === "human") {
@@ -561,8 +685,12 @@ function BoardGame() {
   async function handleAbort() {
     if (!gameId) return;
     await commands.abortGame(gameId);
+    void handleRoleplayGameOver(null);
     setGameState("gameOver");
     setResult("*");
+    if (activeTab) {
+      clearGameSession(activeTab);
+    }
   }
 
   async function handleResign() {
@@ -572,6 +700,10 @@ function BoardGame() {
   }
 
   async function handleNewGame() {
+    roleplay.cancelGame();
+    if (activeTab) {
+      clearGameSession(activeTab);
+    }
     setGameId(null);
     setGameState("settingUp");
     setWhiteTime(null);
@@ -597,19 +729,25 @@ function BoardGame() {
 
   return (
     <>
+      {roleplay.active && (
+        <IntermissionOverlay payload={roleplay.active.payload} onEnded={roleplay.endSide} />
+      )}
       <Portal target="#left" style={{ height: "100%" }}>
         <Board
           editingMode={gameState === "settingUp" && editingMode}
           viewOnly={gameState !== "playing" && !editingMode}
           disableVariations
           boardRef={boardRef}
-          movable={gameState === "settingUp" && editingMode ? "none" : movable}
+          movable={
+            roleplay.isPaused ? "none" : gameState === "settingUp" && editingMode ? "none" : movable
+          }
+          paused={roleplay.isPaused}
           whiteTime={gameState === "playing" ? (whiteTime ?? undefined) : undefined}
           blackTime={gameState === "playing" ? (blackTime ?? undefined) : undefined}
           onMove={handleHumanMove}
           selectedPiece={selectedPiece}
           cgRef={cgRef}
-          enablePremoves={isPlayerVsEngine && gameState === "playing"}
+          enablePremoves={isPlayerVsEngine && gameState === "playing" && !roleplay.isPaused}
         />
       </Portal>
       <Portal target="#topRight" style={{ height: "100%", overflow: "hidden" }}>
@@ -700,6 +838,14 @@ function BoardGame() {
                             }}
                           />
 
+                          <Checkbox
+                            label={t("Board.Opponent.Narrative")}
+                            description={t("Board.Opponent.Narrative.Desc")}
+                            checked={narrativeMode}
+                            onChange={(e) => setNarrativeMode(e.currentTarget.checked)}
+                            disabled={!roleplayEnabled}
+                          />
+
                           <Divider variant="dashed" />
 
                           <Checkbox
@@ -747,6 +893,26 @@ function BoardGame() {
                   <Box flex={1}>
                     <GameInfo headers={headers} />
                   </Box>
+                  <IntermissionStatus roleplay={roleplay} />
+                  {gameState === "playing" && (
+                    <Group grow>
+                      <Button
+                        variant="default"
+                        onClick={() => void roleplay.togglePause()}
+                        disabled={!!roleplay.active}
+                        leftSection={roleplay.isPaused ? <IconPlayerPlay /> : <IconPlayerPause />}
+                      >
+                        {roleplay.isPaused ? t("Board.Resume") : t("Board.Pause")}
+                      </Button>
+                      <Button
+                        variant="default"
+                        onClick={() => setChatOpen(true)}
+                        leftSection={<IconMessage />}
+                      >
+                        {t("Roleplay.Chat")}
+                      </Button>
+                    </Group>
+                  )}
                   <Group grow>
                     {gameState === "playing" && (
                       <Button
@@ -815,6 +981,12 @@ function BoardGame() {
           </Stack>
         )}
       </Portal>
+      <ChatDrawer
+        opened={chatOpen}
+        onClose={() => setChatOpen(false)}
+        roleplay={roleplay}
+        gameState={gameState}
+      />
     </>
   );
 }

@@ -28,6 +28,16 @@ import { positionFromFen, swapMove } from "@/utils/chessops";
 import type { SuccessDatabaseInfo } from "@/utils/db";
 import { type Engine, type EngineSettings, engineSchema } from "@/utils/engines";
 import {
+    type Archetype,
+    archetypeSchema,
+    type ChatMessage,
+    DEFAULT_ARCHETYPES,
+    type GameRecord,
+    type IntermissionRecord,
+    type PlayerProfile,
+    playerProfileSchema,
+} from "@/utils/playerProfile";
+import {
     type LichessGamesOptions,
     lichessGamesOptionsSchema,
     type MasterGamesOptions,
@@ -35,7 +45,7 @@ import {
 } from "@/utils/lichess/explorer";
 import { getWinChance, normalizeScore } from "@/utils/score";
 import { genID, type Tab, tabSchema } from "@/utils/tabs";
-import { getEnginesDir } from "../utils/directories";
+import { getEnginesDir, getPlayersDir } from "../utils/directories";
 import type { Session } from "../utils/session";
 import { createAsyncZodStorage, createZodStorage } from "./utils";
 
@@ -113,6 +123,9 @@ export const storedEnginesDirAtom = atomWithStorage<string>("engines-dir", "", u
 export const storedPuzzlesDirAtom = atomWithStorage<string>("puzzles-dir", "", undefined, {
     getOnInit: true,
 });
+export const storedPlayersDirAtom = atomWithStorage<string>("players-dir", "", undefined, {
+    getOnInit: true,
+});
 
 async function ensureParentDir(path: string): Promise<void> {
     const separator = path.includes("\\") ? "\\" : "/";
@@ -176,6 +189,98 @@ export const enginesAtom = unwrap(
     ),
     (prev) => prev,
 );
+
+// Local player profiles
+
+async function getPlayersStoragePath(key: string): Promise<string> {
+    const playersDir = await getPlayersDir();
+    const filename = key.replace(/^players[\\/]/, "");
+    return resolve(playersDir, filename);
+}
+
+const playersFileStorage: AsyncStringStorage = {
+    async getItem(key) {
+        try {
+            return await readTextFile(await getPlayersStoragePath(key));
+        } catch {
+            return null;
+        }
+    },
+    async setItem(key, newValue) {
+        const path = await getPlayersStoragePath(key);
+        await ensureParentDir(path);
+        await writeTextFile(path, newValue);
+    },
+    async removeItem(key) {
+        const path = await getPlayersStoragePath(key);
+        try {
+            await writeTextFile(path, "[]");
+        } catch {
+            // no-op
+        }
+    },
+};
+
+const playerProfilesSchema = zodArray(playerProfileSchema);
+
+export const playerProfilesAtom = unwrap(
+    atomWithStorage<PlayerProfile[]>(
+        "players/players.json",
+        [],
+        createAsyncZodStorage(playerProfilesSchema, playersFileStorage) as AsyncStorage<
+            PlayerProfile[]
+        >,
+    ),
+    (prev) => prev,
+);
+
+const archetypesSchema = zodArray(archetypeSchema);
+
+export const archetypesAtom = unwrap(
+    atomWithStorage<Archetype[]>(
+        "players/archetypes.json",
+        DEFAULT_ARCHETYPES,
+        createAsyncZodStorage(archetypesSchema, playersFileStorage) as AsyncStorage<Archetype[]>,
+    ),
+    (prev) => prev,
+);
+
+// Roleplay settings
+
+export const roleplayBaseDurationAtom = atomWithStorage<number>(
+    "roleplay-base-duration",
+    5000,
+    undefined,
+    { getOnInit: true },
+);
+export const roleplayPulseMinBpmAtom = atomWithStorage<number>(
+    "roleplay-pulse-min-bpm",
+    90,
+    undefined,
+    { getOnInit: true },
+);
+export const roleplayPulseMaxBpmAtom = atomWithStorage<number>(
+    "roleplay-pulse-max-bpm",
+    120,
+    undefined,
+    { getOnInit: true },
+);
+export const intermissionDisplayAtom = atomWithStorage<"both" | "player1" | "player2">(
+    "intermission-display",
+    "both",
+    undefined,
+    { getOnInit: true },
+);
+export const roleplayEnabledAtom = atomWithStorage<boolean>("roleplay-enabled", true, undefined, {
+    getOnInit: true,
+});
+export const roleplayWinIntermissionsAtom = atomWithStorage<boolean>(
+    "roleplay-win-intermissions",
+    true,
+    undefined,
+    { getOnInit: true },
+);
+export const gameNarrativeModeAtom = atomWithStorage<boolean>("game-narrative-mode", true);
 
 // Settings
 
@@ -511,6 +616,18 @@ export const currentPlayersAtom = tabValue(playersFamily);
 
 const gameIdFamily = atomFamily((_tab: string) => atom<string | null>(null));
 export const currentGameIdAtom = tabValue(gameIdFamily);
+
+const gamePausedFamily = atomFamily((_tab: string) => atom<boolean>(false));
+export const currentGamePausedAtom = tabValue(gamePausedFamily);
+
+const gameRecordFamily = atomFamily((_tab: string) => atom<GameRecord | null>(null));
+export const currentGameRecordAtom = tabValue(gameRecordFamily);
+
+const chatFamily = atomFamily((_tab: string) => atom<ChatMessage[]>([]));
+export const currentChatAtom = tabValue(chatFamily);
+
+const intermissionLogFamily = atomFamily((_tab: string) => atom<IntermissionRecord[]>([]));
+export const currentIntermissionLogAtom = tabValue(intermissionLogFamily);
 
 // Practice
 

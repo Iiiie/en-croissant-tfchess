@@ -32,6 +32,8 @@ export default defineConfig({
         removeUnusedKeys: true,
         preservePatterns: [
             "Files.FileType.*",
+            "Players.Category.*",
+            "Players.Role.*",
             "SideBar.*",
             "Settings.Keybinds.Actions.*",
             "TimeControl.*",

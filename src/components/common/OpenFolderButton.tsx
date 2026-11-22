@@ -1,14 +1,14 @@
 import { ActionIcon, Tooltip } from "@mantine/core";
-import { IconFolder } from "@tabler/icons-react";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { IconCopy } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
-import { getDatabasesDir, getEnginesDir, getPuzzlesDir } from "@/utils/directories";
+import { getDatabasesDir, getEnginesDir, getPlayersDir, getPuzzlesDir } from "@/utils/directories";
+import { copyFolderPath } from "@/utils/openFolder";
 
 function OpenFolderButton({
   base,
   folder,
 }: {
-  base?: "Database" | "Document" | "Engines" | "Puzzles";
+  base?: "Database" | "Document" | "Engines" | "Players" | "Puzzles";
   folder: string;
 }) {
   const { t } = useTranslation();
@@ -24,12 +24,15 @@ function OpenFolderButton({
     if (base === "Puzzles") {
       dir = await getPuzzlesDir();
     }
-    await openPath(dir);
+    if (base === "Players") {
+      dir = await getPlayersDir();
+    }
+    await copyFolderPath(dir);
   }
   return (
-    <Tooltip label={t("Common.OpenFolder")}>
-      <ActionIcon onClick={() => openAppDirData()}>
-        <IconFolder size="1.5rem" />
+    <Tooltip label={t("Common.CopyFolderPath")}>
+      <ActionIcon onClick={() => void openAppDirData()}>
+        <IconCopy size="1.5rem" />
       </ActionIcon>
     </Tooltip>
   );

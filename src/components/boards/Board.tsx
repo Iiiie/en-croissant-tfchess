@@ -78,6 +78,7 @@ interface ChessboardProps {
   boardRef: React.MutableRefObject<HTMLDivElement | null>;
   whiteTime?: number;
   blackTime?: number;
+  paused?: boolean;
   practicing?: boolean;
   selectedPiece?: Piece | null;
   onMove?: (uci: string) => void;
@@ -93,6 +94,7 @@ function Board({
   boardRef,
   whiteTime,
   blackTime,
+  paused,
   practicing,
   selectedPiece,
   onMove,
@@ -422,6 +424,7 @@ function Board({
                 turn={turn}
                 whiteTime={whiteTime}
                 blackTime={blackTime}
+                paused={paused}
               />
             )}
           </BoardBar>
@@ -627,7 +630,13 @@ function Board({
 
             <ShowMaterial fen={currentNode.fen} color={orientation} mode={materialDisplay} />
             {hasClock && (
-              <Clock color={orientation} turn={turn} whiteTime={whiteTime} blackTime={blackTime} />
+              <Clock
+                color={orientation}
+                turn={turn}
+                whiteTime={whiteTime}
+                blackTime={blackTime}
+                paused={paused}
+              />
             )}
           </BoardBar>
         </Box>

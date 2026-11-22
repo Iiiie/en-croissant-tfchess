@@ -1,14 +1,4 @@
-import {
-  ActionIcon,
-  Autocomplete,
-  createTheme,
-  Input,
-  localStorageColorSchemeManager,
-  MantineProvider,
-  Textarea,
-  TextInput,
-  v8CssVariablesResolver,
-} from "@mantine/core";
+import { MantineProvider, v8CssVariablesResolver } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { getMatches } from "@tauri-apps/plugin-cli";
@@ -17,7 +7,7 @@ import { attachConsole, error, info, warn } from "@tauri-apps/plugin-log";
 import { getDefaultStore, useAtom, useAtomValue, useSetAtom } from "jotai";
 import { ContextMenuProvider } from "mantine-contextmenu";
 import posthog from "posthog-js";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 
 import { DndProvider } from "react-dnd";
@@ -33,6 +23,7 @@ import {
   storedDatabasesDirAtom,
   storedDocumentDirAtom,
   storedEnginesDirAtom,
+  storedPlayersDirAtom,
   storedPuzzlesDirAtom,
   tabsAtom,
   telemetryEnabledAtom,
@@ -55,24 +46,29 @@ import "@/styles/global.css";
 import { commands } from "./bindings";
 import { handleDeepLink, openCommandLineFile } from "./utils/launch";
 
-const colorSchemeManager = localStorageColorSchemeManager({
-  key: "mantine-color-scheme",
-});
-
 import { getVersion } from "@tauri-apps/api/app";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import ErrorComponent from "@/components/ErrorComponent";
-import { getDatabasesDir, getDocumentDir, getEnginesDir, getPuzzlesDir } from "@/utils/directories";
+import {
+  getDatabasesDir,
+  getDocumentDir,
+  getEnginesDir,
+  getPlayersDir,
+  getPuzzlesDir,
+} from "@/utils/directories";
 import { initUserAgent } from "@/utils/http";
+import { ensureSharedStorage } from "@/utils/playerProfile";
 import { routeTree } from "./routeTree.gen";
+import { colorSchemeManager, createAppTheme } from "./theme";
 
 export type Dirs = {
   documentDir: string;
   databasesDir: string;
   enginesDir: string;
   puzzlesDir: string;
+  playersDir: string;
 };
 
 const router = createRouter({
@@ -86,6 +82,8 @@ const router = createRouter({
       const databasesDir = await getDatabasesDir();
       const enginesDir = await getEnginesDir();
       const puzzlesDir = await getPuzzlesDir();
+      const playersDir = await getPlayersDir();
+      await ensureSharedStorage();
 
       if (!store.get(storedDocumentDirAtom)) {
         store.set(storedDocumentDirAtom, documentDir);
@@ -103,11 +101,16 @@ const router = createRouter({
         store.set(storedPuzzlesDirAtom, puzzlesDir);
       }
 
+      if (!store.get(storedPlayersDirAtom)) {
+        store.set(storedPlayersDirAtom, playersDir);
+      }
+
       return {
         documentDir,
         databasesDir,
         enginesDir,
         puzzlesDir,
+        playersDir,
       } as Dirs;
     },
   },
@@ -159,15 +162,16 @@ function useAppStartup() {
       const store = getDefaultStore();
       const telemetryEnabled = store.get(telemetryEnabledAtom);
 
-      posthog.init("phc_kgEBtifs0EgWlrl4ROYEbnsQ1b7BS2W5BKLNyXe7f8z", {
-        api_host: "https://app.posthog.com",
-        autocapture: false,
-        capture_pageview: false,
-        capture_pageleave: false,
-        disable_session_recording: true,
-      });
-
+      // Only initialise PostHog when telemetry is actually enabled. Otherwise
+      // every failed external request shows up as a WebKit internal load error.
       if (telemetryEnabled) {
+        posthog.init("phc_kgEBtifs0EgWlrl4ROYEbnsQ1b7BS2W5BKLNyXe7f8z", {
+          api_host: "https://app.posthog.com",
+          autocapture: false,
+          capture_pageview: false,
+          capture_pageleave: false,
+          disable_session_recording: true,
+        });
         posthog.capture("app_started", { version: await getVersion() });
       }
       const unlistenFile = await listen<string>("open-cli-file", ({ payload }) => {
@@ -258,41 +262,7 @@ export default function App() {
     };
   }, [setDatabaseConversionState]);
 
-  const theme = createTheme({
-    defaultRadius: "sm",
-    primaryColor,
-    colors: {
-      dark: [
-        "#C1C2C5",
-        "#A6A7AB",
-        "#909296",
-        "#5c5f66",
-        "#373A40",
-        "#2C2E33",
-        "#25262b",
-        "#1A1B1E",
-        "#141517",
-        "#101113",
-      ],
-    },
-    components: {
-      ActionIcon: ActionIcon.extend({
-        defaultProps: {
-          variant: "transparent",
-          color: "gray",
-        },
-      }),
-      TextInput: TextInput.extend({ defaultProps: { spellCheck } }),
-      Autocomplete: Autocomplete.extend({ defaultProps: { spellCheck } }),
-      Textarea: Textarea.extend({ defaultProps: { spellCheck } }),
-      Input: Input.extend({
-        defaultProps: {
-          // @ts-expect-error - Solve mantine input type check
-          spellCheck,
-        },
-      }),
-    },
-  });
+  const theme = useMemo(() => createAppTheme(primaryColor, spellCheck), [primaryColor, spellCheck]);
 
   const valid3dPieceSets = [
     "Basic",

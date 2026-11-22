@@ -46,8 +46,9 @@ use crate::db::{
     get_player, get_players_game_info, get_tournaments, search_position,
 };
 use crate::game::{
-    abort_game, get_game_engine_logs, get_game_state, make_game_move, resign_game, start_game,
-    take_back_game_move, ClockUpdateEvent, GameMoveEvent, GameOverEvent,
+    abort_game, get_game_engine_logs, get_game_state, make_game_move, pause_game_clock,
+    resign_game, resume_game_clock, start_game, take_back_game_move, ClockUpdateEvent,
+    GameErrorEvent, GameMoveEvent, GameOverEvent,
 };
 
 use crate::fs::set_file_as_executable;
@@ -123,6 +124,17 @@ pub fn file_from_args(args: &[String], cwd: &str) -> Option<String> {
 }
 
 fn main() {
+    // WebKitGTK 2.50 crashes its renderer after a few fullscreen intermission
+    // windows on some Linux setups (DMABUF), which reloads the main webview and
+    // loses the board state. Disabling the DMABUF renderer avoids the crash.
+    // Users can override by setting the variable themselves.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     let specta_builder = tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands!(
             close_splashscreen,
@@ -185,6 +197,8 @@ fn main() {
             resign_game,
             abort_game,
             get_game_engine_logs,
+            pause_game_clock,
+            resume_game_clock,
             get_progress,
             clear_progress,
             get_sound_server_port
@@ -195,7 +209,8 @@ fn main() {
             ProgressEvent,
             GameMoveEvent,
             ClockUpdateEvent,
-            GameOverEvent
+            GameOverEvent,
+            GameErrorEvent
         ));
 
     #[cfg(debug_assertions)]
@@ -239,6 +254,7 @@ fn main() {
                     tauri_plugin_window_state::StateFlags::all()
                         & !tauri_plugin_window_state::StateFlags::VISIBLE,
                 )
+                .with_filter(|label| !label.starts_with("intermission-"))
                 .build(),
         )
         .plugin(tauri_plugin_process::init())
@@ -252,6 +268,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .manage(AppState::default())

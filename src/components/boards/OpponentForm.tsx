@@ -4,17 +4,21 @@ import {
   Group,
   InputWrapper,
   SegmentedControl,
+  Select,
   Stack,
   TextInput,
 } from "@mantine/core";
 import { IconCpu, IconUser } from "@tabler/icons-react";
+import { useAtomValue } from "jotai";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import type { GoMode } from "@/bindings";
 import GoModeInput from "@/components/common/GoModeInput";
 import TimeInput, { type TimeType } from "@/components/common/TimeInput";
 import EngineSettingsForm from "@/components/panels/analysis/EngineSettingsForm";
+import { enginesAtom, playerProfilesAtom } from "@/state/atoms";
 import type { TimeControlField } from "@/utils/clock";
-import type { EngineSettings, LocalEngine } from "@/utils/engines";
+import type { Engine, EngineSettings, LocalEngine } from "@/utils/engines";
 import { EnginesSelect } from "./EnginesSelect";
 
 export type OpponentSettings =
@@ -22,12 +26,15 @@ export type OpponentSettings =
       type: "human";
       timeControl?: TimeControlField;
       name?: string;
+      profileId?: string;
       timeUnit?: TimeType;
       incrementUnit?: TimeType;
     }
   | {
       type: "engine";
       timeControl?: TimeControlField;
+      name?: string;
+      profileId?: string;
       engine: LocalEngine | null;
       go: GoMode;
       engineSettings?: EngineSettings;
@@ -52,6 +59,19 @@ export function OpponentForm({
   setOtherOpponent: React.Dispatch<React.SetStateAction<OpponentSettings>>;
 }) {
   const { t } = useTranslation();
+  const profiles = useAtomValue(playerProfilesAtom);
+  const engines = useAtomValue(enginesAtom);
+  const profileOptions = useMemo(
+    () =>
+      (profiles ?? []).map((profile) => ({
+        value: profile.id,
+        label:
+          profile.kind === "engine"
+            ? t("Players.EngineProfileOption", { name: profile.name })
+            : profile.name,
+      })),
+    [profiles, t],
+  );
 
   function updateType(type: "engine" | "human") {
     if (type === "human") {
@@ -59,19 +79,69 @@ export function OpponentForm({
         ...prev,
         type: "human",
         name: "Player",
+        profileId: undefined,
       }));
     } else {
       setOpponent((prev) => ({
         ...prev,
         type: "engine",
+        profileId: undefined,
         engine: null,
         go: ("go" in prev && prev.go) || { t: "Depth", c: 24 },
       }));
     }
   }
 
+  function selectProfile(profileId: string | null) {
+    if (!profileId) {
+      setOpponent((prev) => ({ ...prev, profileId: undefined }));
+      return;
+    }
+
+    const profile = (profiles ?? []).find((item) => item.id === profileId);
+    if (!profile) {
+      return;
+    }
+
+    const engine = profile.engineId
+      ? (engines ?? []).find(
+          (item): item is Extract<Engine, { type: "local" }> =>
+            item.type === "local" && item.id === profile.engineId,
+        )
+      : undefined;
+
+    if (profile.kind === "human") {
+      setOpponent((prev) => ({
+        ...prev,
+        type: "human",
+        name: profile.name,
+        profileId: profile.id,
+      }));
+      return;
+    }
+
+    setOpponent((prev) => ({
+      ...prev,
+      type: "engine",
+      name: profile.name,
+      profileId: profile.id,
+      engine: engine ?? null,
+      engineSettings: profile.engineSettings ?? engine?.settings ?? undefined,
+      go: profile.go ?? engine?.go ?? { t: "Depth", c: 24 },
+    }));
+  }
+
   return (
     <Stack flex={1}>
+      <Select
+        label={t("Board.Opponent.Profile")}
+        placeholder={t("Board.Opponent.NoProfile")}
+        data={profileOptions}
+        value={opponent.profileId ?? null}
+        onChange={selectProfile}
+        clearable
+        searchable
+      />
       <SegmentedControl
         data={[
           {

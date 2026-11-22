@@ -59,3 +59,12 @@ export async function getPuzzlesDir(): Promise<string> {
 
     return ensureDirectory(await resolve(await appDataDir(), "puzzles"));
 }
+
+export async function getPlayersDir(): Promise<string> {
+    const customDir = getStoredDirectory("players-dir");
+    if (customDir) {
+        return ensureDirectory(customDir);
+    }
+
+    return ensureDirectory(await resolve(await appDataDir(), "players"));
+}

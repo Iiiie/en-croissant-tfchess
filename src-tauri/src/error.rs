@@ -75,6 +75,9 @@ pub enum Error {
     #[error("Game not in progress")]
     GameNotInProgress,
 
+    #[error("Game is paused")]
+    GamePaused,
+
     #[error("Not human's turn")]
     NotHumanTurn,
 

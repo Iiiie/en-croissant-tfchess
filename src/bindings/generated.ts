@@ -475,6 +475,22 @@ async getGameEngineLogs(gameId: string, color: string) : Promise<Result<EngineLo
     else return { status: "error", error: e  as any };
 }
 },
+async pauseGameClock(gameId: string) : Promise<Result<GameState, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pause_game_clock", { gameId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async resumeGameClock(gameId: string) : Promise<Result<GameState, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("resume_game_clock", { gameId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getProgress(id: string) : Promise<ProgressItem | null> {
     return await TAURI_INVOKE("get_progress", { id });
 },
@@ -498,6 +514,7 @@ export const events = __makeEvents__<{
 bestMovesPayload: BestMovesPayload,
 clockUpdateEvent: ClockUpdateEvent,
 databaseProgress: DatabaseProgress,
+gameErrorEvent: GameErrorEvent,
 gameMoveEvent: GameMoveEvent,
 gameOverEvent: GameOverEvent,
 progressEvent: ProgressEvent
@@ -505,6 +522,7 @@ progressEvent: ProgressEvent
 bestMovesPayload: "best-moves-payload",
 clockUpdateEvent: "clock-update-event",
 databaseProgress: "database-progress",
+gameErrorEvent: "game-error-event",
 gameMoveEvent: "game-move-event",
 gameOverEvent: "game-over-event",
 progressEvent: "progress-event"
@@ -529,16 +547,27 @@ export type EngineOption = { name: string; value: string }
 export type EngineOptions = { fen: string; moves: string[]; extraOptions: EngineOption[] }
 export type Event = { name: string | null; games_count: number }
 export type FileMetadata = { last_modified: number }
-export type GameConfig = { white: PlayerConfig; black: PlayerConfig; whiteTimeControl: TimeControl | null; blackTimeControl: TimeControl | null; initialFen: string | null; initialMoves?: string[]; openingBook: OpeningBookConfig | null }
+export type GameConfig = { white: PlayerConfig; black: PlayerConfig; whiteTimeControl: TimeControl | null; blackTimeControl: TimeControl | null; initialFen: string | null; initialMoves?: string[]; openingBook: OpeningBookConfig | null; 
+/**
+ * When true, captures and checks pause the game before the next move so the
+ * frontend can run an intermission without the engine moving first.
+ */
+narrative?: boolean }
 export type GameEndReason = "checkmate" | "timeout" | "resignation" | "abandonment"
+export type GameErrorEvent = { gameId: string; message: string }
 export type GameMove = { uci: string; san: string; fenAfter: string; clock: bigint | null; whiteTime: bigint | null; blackTime: bigint | null }
-export type GameMoveEvent = { gameId: string; moves: GameMove[]; fen: string; whiteTime: bigint | null; blackTime: bigint | null }
+export type GameMoveEvent = { gameId: string; moves: GameMove[]; fen: string; whiteTime: bigint | null; blackTime: bigint | null; 
+/**
+ * True when this move triggered a narrative intermission (the clock is
+ * already paused on the backend).
+ */
+intermission: boolean }
 export type GameOutcome = "Won" | "Drawn" | "Lost"
 export type GameOverEvent = { gameId: string; result: GameResult; moves: GameMove[] }
 export type GameQuery = { options?: QueryOptions<GameSort> | null; player1?: string | null; player2?: string | null; tournament?: string | null; start_date?: string | null; end_date?: string | null; range1?: [number, number] | null; range2?: [number, number] | null; sides?: Sides | null; outcome?: string | null; position?: PositionQueryJs | null; wanted_result?: string | null }
 export type GameResult = { type: "whiteWins"; reason: GameEndReason } | { type: "blackWins"; reason: GameEndReason } | { type: "draw"; reason: DrawReason }
 export type GameSort = "id" | "date" | "whiteElo" | "blackElo" | "averageElo" | "ply_count"
-export type GameState = { gameId: string; status: GameStatus; initialFen: string; moves: GameMove[]; currentFen: string; ply: number; turn: string; whiteTime: bigint | null; blackTime: bigint | null; whitePlayer: string; blackPlayer: string }
+export type GameState = { gameId: string; status: GameStatus; initialFen: string; moves: GameMove[]; currentFen: string; ply: number; turn: string; whiteTime: bigint | null; blackTime: bigint | null; whitePlayer: string; blackPlayer: string; paused: boolean }
 export type GameStatus = "playing" | { finished: { result: GameResult } }
 export type GoMode = { t: "PlayersTime"; c: PlayersTime } | { t: "Depth"; c: number } | { t: "Time"; c: number } | { t: "Nodes"; c: number } | { t: "Infinite" }
 export type MoveAnalysis = { best: BestMoves[]; novelty: boolean; is_sacrifice: boolean }

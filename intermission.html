@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Intermission</title>
+    <meta charset="utf-8" />
+    <style>
+      html,
+      body,
+      #app {
+        height: 100%;
+        margin: 0;
+      }
+    </style>
+    <script>
+      // Paint the background before React loads to avoid a white flash.
+      (function () {
+        var scheme = "dark";
+        try {
+          scheme = localStorage.getItem("mantine-color-scheme") || "dark";
+        } catch (e) {}
+        if (scheme === "auto") {
+          scheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.style.colorScheme = scheme;
+        document.documentElement.style.backgroundColor = scheme === "dark" ? "#1A1B1E" : "#FFFFFF";
+      })();
+    </script>
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/intermission.tsx"></script>
+  </body>
+</html>

@@ -45,7 +45,7 @@
     "beforeDevCommand": "pnpm prepare:aix-extension && pnpm start-vite",
     "beforeBuildCommand": "pnpm prepare:aix-extension && pnpm build-vite",
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:1420"
+    "devUrl": "http://127.0.0.1:1420"
   },
   "productName": "en-croissant",
   "mainBinaryName": "en-croissant",
@@ -86,7 +86,9 @@
     "security": {
       "assetProtocol": {
         "scope": [
-          "**"
+          "$APPDATA/**",
+          "$HOME/**",
+          "$RESOURCE/**"
         ],
         "enable": true
       },

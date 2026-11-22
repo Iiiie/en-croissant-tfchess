@@ -1,8 +1,10 @@
 Tfchess is supposed to be chess program that supports roleplay based around transforming the opponnent.
 -First it will focus on either local hot seat play or playing against chess engines of varying strenght
--It will need to be able to support player profiles, with ELO and notes
--It will need ability to stop timer on demand, so players can chat/roleplay
+-It will need to be able to support player profiles, with ELO and notes. Current users in En Crossaint are for connecting to online chess services, but I want local Users for different purpose - so I can associate an engine with the Player profile, so the player profile can track it's wins and loses and it's elo, so it can have it's own folder for images and messages
+-It will need ability to stop timer on demand, so players can chat/roleplay.
+-Add a chat window, where user can choose which player they impresonate and chat. Each game, chatlog and intermission events should be stored in player profile history.
 
 -It will have automatic intermissions. Every time a piece is captured or a kind is checked, timer will stop and a random image from player's images folder will show on the screen together with a message. Messages and images might be completely random or based on certain variables. Each player recieves image from their own folder (or folders - there might be different images based on whether the player took or lost the piece). Additionally, the image will show up for certain time, and a rhythmic pulsing will show up, something like in a rhythm game. Once the intermission ends, timer and game will resume.
 
--
+-each player profile should have a "Vulnerability" stat which multiples how long the intermissions are. If one player's intermission ends before the other, they can watch the board and think while the timer is paused
+

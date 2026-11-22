@@ -1,0 +1,28 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "intermission-capability",
+    "description": "Capability for the reusable roleplay intermission windows",
+    "windows": [
+        "intermission-*"
+    ],
+    "permissions": [
+        "core:default",
+        "core:window:allow-close",
+        "core:window:allow-destroy",
+        "core:window:allow-show",
+        "core:window:allow-set-focus",
+        "core:window:allow-set-title",
+        "core:window:allow-is-minimized",
+        "fs:default",
+        "fs:allow-read-file",
+        "fs:scope-home-recursive",
+        {
+            "identifier": "fs:scope-appdata-recursive",
+            "allow": [
+                {
+                    "path": "**"
+                }
+            ]
+        }
+    ]
+}

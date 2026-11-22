@@ -9,7 +9,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use log::{error, info};
+use log::{error, info, warn};
 use pgn_reader::{RawTag, Reader, Visitor};
 use polyglot_book_rs::PolyglotBook;
 use rand::{seq::IteratorRandom, Rng};
@@ -65,6 +65,10 @@ pub struct GameConfig {
     #[serde(default)]
     pub initial_moves: Vec<String>,
     pub opening_book: Option<OpeningBookConfig>,
+    /// When true, captures and checks pause the game before the next move so the
+    /// frontend can run an intermission without the engine moving first.
+    #[serde(default)]
+    pub narrative: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Type)]
@@ -138,6 +142,7 @@ pub struct GameState {
     pub black_time: Option<u64>,
     pub white_player: String,
     pub black_player: String,
+    pub paused: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Type, Event)]
@@ -148,6 +153,9 @@ pub struct GameMoveEvent {
     pub fen: String,
     pub white_time: Option<u64>,
     pub black_time: Option<u64>,
+    /// True when this move triggered a narrative intermission (the clock is
+    /// already paused on the backend).
+    pub intermission: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Type, Event)]
@@ -164,6 +172,13 @@ pub struct GameOverEvent {
     pub game_id: GameId,
     pub result: GameResult,
     pub moves: Vec<GameMove>,
+}
+
+#[derive(Clone, Debug, Serialize, Type, Event)]
+#[serde(rename_all = "camelCase")]
+pub struct GameErrorEvent {
+    pub game_id: GameId,
+    pub message: String,
 }
 
 struct ClockState {
@@ -183,6 +198,9 @@ struct GameController {
     position_history: HashMap<String, u32>,
     status: GameStatus,
     clock: Option<ClockState>,
+    paused: bool,
+    narrative: bool,
+    intermission_pending: bool,
     white_engine: Option<Arc<Mutex<BaseEngine>>>,
     black_engine: Option<Arc<Mutex<BaseEngine>>>,
     shutdown_tx: Option<watch::Sender<bool>>,
@@ -225,6 +243,7 @@ impl GameController {
         position_history.insert(initial_key, 1);
 
         let initial_moves = config.initial_moves.clone();
+        let narrative = config.narrative;
 
         let mut controller = Self {
             game_id,
@@ -235,6 +254,9 @@ impl GameController {
             position_history,
             status: GameStatus::Playing,
             clock,
+            paused: false,
+            narrative,
+            intermission_pending: false,
             white_engine: None,
             black_engine: None,
             shutdown_tx: None,
@@ -282,6 +304,7 @@ impl GameController {
             black_time,
             white_player,
             black_player,
+            paused: self.paused,
         }
     }
 
@@ -306,11 +329,16 @@ impl GameController {
         if self.status != GameStatus::Playing {
             return Err(Error::GameNotInProgress);
         }
+        if self.paused {
+            return Err(Error::GamePaused);
+        }
 
         let uci = UciMove::from_ascii(uci_str.as_bytes())?;
         let mv = uci.to_move(&self.position)?;
 
         let san = SanPlus::from_move_and_play_unchecked(&mut self.position.clone(), mv);
+        let san_text = san.to_string();
+        let is_capture = san_text.contains('x');
 
         let clock = self.clock.as_ref().and_then(|c| {
             if self.position.turn() == Color::White {
@@ -351,7 +379,7 @@ impl GameController {
 
         let game_move = GameMove {
             uci: uci_str.to_string(),
-            san: san.to_string(),
+            san: san_text,
             fen_after,
             clock,
             white_time,
@@ -360,6 +388,17 @@ impl GameController {
 
         self.moves.push(game_move.clone());
         self.check_game_end();
+
+        // Pause *inside* the move application, before the move event is emitted
+        // and before the game loop can start the engine for the next turn. This
+        // guarantees the frontend can run the intermission without the engine
+        // playing another move first.
+        let is_check = self.position.is_check();
+        self.intermission_pending =
+            self.narrative && self.status == GameStatus::Playing && (is_capture || is_check);
+        if self.intermission_pending {
+            self.pause_clock();
+        }
 
         Ok(game_move)
     }
@@ -402,6 +441,9 @@ impl GameController {
         if self.moves.is_empty() {
             return Err(Error::NoMovesFound);
         }
+        if self.paused {
+            return Err(Error::GamePaused);
+        }
 
         if let Some(ply) = ply {
             if ply >= self.moves.len() {
@@ -425,6 +467,7 @@ impl GameController {
 
         self.status = GameStatus::Playing;
         self.engine_thinking = false;
+        self.intermission_pending = false;
         self.rebuild_position_from_moves()?;
         self.check_game_end();
         Ok(())
@@ -525,6 +568,10 @@ impl GameController {
     }
 
     fn check_timeout(&mut self) -> Option<GameResult> {
+        if self.paused {
+            return None;
+        }
+
         if let Some(ref clock) = self.clock {
             let elapsed = clock.last_tick.elapsed().as_millis() as u64;
 
@@ -549,6 +596,10 @@ impl GameController {
 
     fn get_current_times(&self) -> (Option<u64>, Option<u64>) {
         if let Some(ref clock) = self.clock {
+            if self.paused {
+                return (clock.white_time, clock.black_time);
+            }
+
             let elapsed = clock.last_tick.elapsed().as_millis() as u64;
 
             let white_time = if self.position.turn() == Color::White {
@@ -579,6 +630,42 @@ impl GameController {
     fn reset_clock(&mut self) {
         if let Some(ref mut clock) = self.clock {
             clock.last_tick = Instant::now();
+        }
+    }
+
+    fn pause_clock(&mut self) {
+        if self.paused || self.status != GameStatus::Playing {
+            return;
+        }
+
+        if let Some(ref mut clock) = self.clock {
+            let elapsed = clock.last_tick.elapsed().as_millis() as u64;
+
+            if self.position.turn() == Color::White {
+                if let Some(wt) = clock.white_time {
+                    clock.white_time = Some(wt.saturating_sub(elapsed));
+                }
+            } else if let Some(bt) = clock.black_time {
+                clock.black_time = Some(bt.saturating_sub(elapsed));
+            }
+
+            clock.last_tick = Instant::now();
+        }
+
+        self.paused = true;
+    }
+
+    fn resume_clock(&mut self) {
+        if !self.paused {
+            return;
+        }
+
+        self.paused = false;
+        self.intermission_pending = false;
+        self.reset_clock();
+
+        if let Some(tx) = &self.move_notify_tx {
+            let _ = tx.try_send(());
         }
     }
 }
@@ -692,6 +779,26 @@ impl GameManager {
         Ok(controller.get_state())
     }
 
+    pub async fn pause_clock(&self, game_id: &str) -> Result<GameState, Error> {
+        let game = self
+            .games
+            .get(game_id)
+            .ok_or_else(|| Error::GameNotFound(game_id.to_string()))?;
+        let mut controller = game.write().await;
+        controller.pause_clock();
+        Ok(controller.get_state())
+    }
+
+    pub async fn resume_clock(&self, game_id: &str) -> Result<GameState, Error> {
+        let game = self
+            .games
+            .get(game_id)
+            .ok_or_else(|| Error::GameNotFound(game_id.to_string()))?;
+        let mut controller = game.write().await;
+        controller.resume_clock();
+        Ok(controller.get_state())
+    }
+
     pub async fn make_move(
         &self,
         game_id: &str,
@@ -718,6 +825,7 @@ impl GameManager {
             fen: game_move.fen_after,
             white_time,
             black_time,
+            intermission: controller.intermission_pending,
         }
         .emit(app)?;
 
@@ -759,6 +867,7 @@ impl GameManager {
             fen,
             white_time,
             black_time,
+            intermission: controller.intermission_pending,
         }
         .emit(app)?;
 
@@ -1216,6 +1325,7 @@ async fn maybe_start_engine(
 ) -> bool {
     let mut ctrl = controller.write().await;
     if ctrl.status == GameStatus::Playing
+        && !ctrl.paused
         && ctrl.is_engine_turn()
         && !ctrl.engine_thinking
         && engine_task.is_none()
@@ -1274,26 +1384,38 @@ async fn game_loop(
                         error!("Engine move error: {:?}", e);
                         let mut ctrl = controller.write().await;
                         ctrl.engine_thinking = false;
-                        let result = if ctrl.position.turn() == Color::White {
-                            GameResult::BlackWins { reason: GameEndReason::Abandonment }
-                        } else {
-                            GameResult::WhiteWins { reason: GameEndReason::Abandonment }
-                        };
-                        ctrl.end_game(result.clone());
-                        let _ = GameOverEvent { game_id: game_id.clone(), result, moves: ctrl.moves.clone() }.emit(&app);
-                        break;
+                        // Engine failures (including a move attempted while the
+                        // intermission paused the clock) must never end the match.
+                        // Pause and tell the frontend so the user can resume,
+                        // take back, or resign deliberately.
+                        if ctrl.status == GameStatus::Playing
+                            && !matches!(&e, Error::GamePaused | Error::GameNotInProgress)
+                        {
+                            ctrl.pause_clock();
+                            let message = e.to_string();
+                            drop(ctrl);
+                            let _ = GameErrorEvent {
+                                game_id: game_id.clone(),
+                                message,
+                            }
+                            .emit(&app);
+                        }
                     }
-                    Some(Err(_join_error)) => {
+                    Some(Err(join_error)) => {
+                        warn!("engine task failed for game {game_id}: {join_error}");
                         let mut ctrl = controller.write().await;
                         ctrl.engine_thinking = false;
-                        let result = if ctrl.position.turn() == Color::White {
-                            GameResult::BlackWins { reason: GameEndReason::Abandonment }
-                        } else {
-                            GameResult::WhiteWins { reason: GameEndReason::Abandonment }
-                        };
-                        ctrl.end_game(result.clone());
-                        let _ = GameOverEvent { game_id: game_id.clone(), result, moves: ctrl.moves.clone() }.emit(&app);
-                        break;
+                        // A panicked/aborted engine task is an internal error,
+                        // not a reason to abandon the user's game.
+                        if ctrl.status == GameStatus::Playing {
+                            ctrl.pause_clock();
+                            drop(ctrl);
+                            let _ = GameErrorEvent {
+                                game_id: game_id.clone(),
+                                message: format!("Engine task failed: {join_error}"),
+                            }
+                            .emit(&app);
+                        }
                     }
                     None => unreachable!(),
                 }
@@ -1313,6 +1435,10 @@ async fn game_loop(
 
                     if ctrl.status != GameStatus::Playing {
                         break;
+                    }
+
+                    if ctrl.paused {
+                        continue;
                     }
 
                     if let Some(result) = ctrl.check_timeout() {
@@ -1407,7 +1533,7 @@ async fn request_engine_move(
             let mut ctrl = controller.write().await;
             ctrl.engine_thinking = false;
 
-            if ctrl.status != GameStatus::Playing || ctrl.position.turn() != turn {
+            if ctrl.status != GameStatus::Playing || ctrl.paused || ctrl.position.turn() != turn {
                 return Ok(());
             }
 
@@ -1420,6 +1546,7 @@ async fn request_engine_move(
                 fen: game_move.fen_after,
                 white_time,
                 black_time,
+                intermission: ctrl.intermission_pending,
             }
             .emit(app)?;
 
@@ -1439,7 +1566,9 @@ async fn request_engine_move(
     let (engine_arc, go_mode, initial_fen, moves, turn) = {
         let ctrl = controller.read().await;
 
-        if ctrl.status != GameStatus::Playing {
+        if ctrl.status != GameStatus::Playing || ctrl.paused {
+            drop(ctrl);
+            controller.write().await.engine_thinking = false;
             return Ok(());
         }
 
@@ -1497,7 +1626,7 @@ async fn request_engine_move(
     let mut ctrl = controller.write().await;
     ctrl.engine_thinking = false;
 
-    if ctrl.status != GameStatus::Playing {
+    if ctrl.status != GameStatus::Playing || ctrl.paused {
         return Ok(());
     }
 
@@ -1514,6 +1643,7 @@ async fn request_engine_move(
         fen: game_move.fen_after,
         white_time,
         black_time,
+        intermission: ctrl.intermission_pending,
     }
     .emit(app)?;
 
@@ -1603,4 +1733,22 @@ pub async fn get_game_engine_logs(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<Vec<EngineLog>, Error> {
     state.game_manager.get_engine_logs(&game_id, &color).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pause_game_clock(
+    game_id: String,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<GameState, Error> {
+    state.game_manager.pause_clock(&game_id).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn resume_game_clock(
+    game_id: String,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<GameState, Error> {
+    state.game_manager.resume_clock(&game_id).await
 }

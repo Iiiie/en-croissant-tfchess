@@ -2,6 +2,7 @@ import {
   ActionIcon,
   Card,
   Group,
+  NumberInput,
   ScrollArea,
   Select,
   Stack,
@@ -24,6 +25,7 @@ import {
   IconReload,
   IconSearch,
   IconShield,
+  IconUsers,
   IconVolume,
 } from "@tabler/icons-react";
 import { useLoaderData } from "@tanstack/react-router";
@@ -31,7 +33,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useAtom } from "jotai";
 import { RESET } from "jotai/utils";
 import posthog from "posthog-js";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   autoPromoteAtom,
@@ -40,6 +42,8 @@ import {
   enableBoardScrollAtom,
   eraseDrawablesOnClickAtom,
   forcedEnPassantAtom,
+  gameNarrativeModeAtom,
+  intermissionDisplayAtom,
   materialDisplayAtom,
   moveHighlightAtom,
   moveInputAtom,
@@ -50,6 +54,11 @@ import {
   practiceAutoDifficultyAtom,
   previewBoardOnHoverAtom,
   flipBoardAfterMoveAtom,
+  roleplayBaseDurationAtom,
+  roleplayEnabledAtom,
+  roleplayPulseMinBpmAtom,
+  roleplayPulseMaxBpmAtom,
+  roleplayWinIntermissionsAtom,
   showArrowsAtom,
   showConsecutiveArrowsAtom,
   showCoordinatesAtom,
@@ -60,11 +69,13 @@ import {
   storedDatabasesDirAtom,
   storedDocumentDirAtom,
   storedEnginesDirAtom,
+  storedPlayersDirAtom,
   storedPuzzlesDirAtom,
   telemetryEnabledAtom,
 } from "@/state/atoms";
 import { keyMapAtom } from "@/state/keybinds";
 import FileInput from "../common/FileInput";
+import OpenFolderButton from "../common/OpenFolderButton";
 import BoardSelect from "./BoardSelect";
 import ColorControl from "./ColorControl";
 import DimensionToggle from "./DimensionToggle";
@@ -87,6 +98,7 @@ type SettingCategory =
   | "keybinds"
   | "directories"
   | "repertoire"
+  | "roleplay"
   | "privacy";
 
 interface SettingItem {
@@ -128,6 +140,53 @@ function SettingRow({
   );
 }
 
+function NumberSetting({
+  value,
+  onChange,
+  suffix,
+  step,
+  decimalScale,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  suffix?: string;
+  step?: number;
+  decimalScale?: number;
+}) {
+  const [draft, setDraft] = useState<string | number>(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = () => {
+    const parsed = typeof draft === "number" ? draft : Number.parseFloat(draft);
+    if (Number.isFinite(parsed)) {
+      onChange(parsed);
+    } else {
+      setDraft(value);
+    }
+  };
+
+  return (
+    <NumberInput
+      w={160}
+      value={draft}
+      onChange={(next) => setDraft(next)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          commit();
+          event.currentTarget.blur();
+        }
+      }}
+      suffix={suffix}
+      step={step}
+      decimalScale={decimalScale}
+    />
+  );
+}
+
 function TelemetrySwitch() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useAtom(telemetryEnabledAtom);
@@ -166,6 +225,7 @@ export default function Page() {
       databasesDir: defaultDatabasesDir,
       enginesDir: defaultEnginesDir,
       puzzlesDir: defaultPuzzlesDir,
+      playersDir: defaultPlayersDir,
     },
     version,
   } = useLoaderData({ from: "/settings" });
@@ -177,6 +237,16 @@ export default function Page() {
   enginesDirectory = enginesDirectory || defaultEnginesDir;
   let [puzzlesDirectory, setPuzzlesDirectory] = useAtom(storedPuzzlesDirAtom);
   puzzlesDirectory = puzzlesDirectory || defaultPuzzlesDir;
+  let [playersDirectory, setPlayersDirectory] = useAtom(storedPlayersDirAtom);
+  playersDirectory = playersDirectory || defaultPlayersDir;
+
+  const [roleplayEnabled, setRoleplayEnabled] = useAtom(roleplayEnabledAtom);
+  const [roleplayDuration, setRoleplayDuration] = useAtom(roleplayBaseDurationAtom);
+  const [pulseMin, setPulseMin] = useAtom(roleplayPulseMinBpmAtom);
+  const [pulseMax, setPulseMax] = useAtom(roleplayPulseMaxBpmAtom);
+  const [winIntermissions, setWinIntermissions] = useAtom(roleplayWinIntermissionsAtom);
+  const [narrativeMode, setNarrativeMode] = useAtom(gameNarrativeModeAtom);
+  const [intermissionDisplay, setIntermissionDisplay] = useAtom(intermissionDisplayAtom);
 
   const [moveMethod, setMoveMethod] = useAtom(moveMethodAtom);
   const [pieceAnimation, setPieceAnimation] = useAtom(pieceAnimationAtom);
@@ -599,17 +669,21 @@ export default function Page() {
         description: t("Settings.Directories.Files.Desc"),
         keywords: ["files", "directory", "folder", "path"],
         render: () => (
-          <FileInput
-            onClick={async () => {
-              const selected = await open({
-                multiple: false,
-                directory: true,
-              });
-              if (!selected || typeof selected !== "string") return;
-              setFilesDirectory(selected);
-            }}
-            filename={filesDirectory || null}
-          />
+          <Group align="flex-end" wrap="nowrap">
+            <FileInput
+              style={{ flex: 1 }}
+              onClick={async () => {
+                const selected = await open({
+                  multiple: false,
+                  directory: true,
+                });
+                if (!selected || typeof selected !== "string") return;
+                setFilesDirectory(selected);
+              }}
+              filename={filesDirectory || null}
+            />
+            <OpenFolderButton base="Document" folder={filesDirectory} />
+          </Group>
         ),
       },
       {
@@ -619,17 +693,21 @@ export default function Page() {
         description: t("Settings.Directories.Databases.Desc"),
         keywords: ["databases", "directory", "folder", "path"],
         render: () => (
-          <FileInput
-            onClick={async () => {
-              const selected = await open({
-                multiple: false,
-                directory: true,
-              });
-              if (!selected || typeof selected !== "string") return;
-              setDatabasesDirectory(selected);
-            }}
-            filename={databasesDirectory || null}
-          />
+          <Group align="flex-end" wrap="nowrap">
+            <FileInput
+              style={{ flex: 1 }}
+              onClick={async () => {
+                const selected = await open({
+                  multiple: false,
+                  directory: true,
+                });
+                if (!selected || typeof selected !== "string") return;
+                setDatabasesDirectory(selected);
+              }}
+              filename={databasesDirectory || null}
+            />
+            <OpenFolderButton base="Database" folder={databasesDirectory} />
+          </Group>
         ),
       },
       {
@@ -639,17 +717,21 @@ export default function Page() {
         description: t("Settings.Directories.Engines.Desc"),
         keywords: ["engines", "directory", "folder", "path"],
         render: () => (
-          <FileInput
-            onClick={async () => {
-              const selected = await open({
-                multiple: false,
-                directory: true,
-              });
-              if (!selected || typeof selected !== "string") return;
-              setEnginesDirectory(selected);
-            }}
-            filename={enginesDirectory || null}
-          />
+          <Group align="flex-end" wrap="nowrap">
+            <FileInput
+              style={{ flex: 1 }}
+              onClick={async () => {
+                const selected = await open({
+                  multiple: false,
+                  directory: true,
+                });
+                if (!selected || typeof selected !== "string") return;
+                setEnginesDirectory(selected);
+              }}
+              filename={enginesDirectory || null}
+            />
+            <OpenFolderButton base="Engines" folder={enginesDirectory} />
+          </Group>
         ),
       },
       {
@@ -659,16 +741,138 @@ export default function Page() {
         description: t("Settings.Directories.Puzzles.Desc"),
         keywords: ["puzzles", "directory", "folder", "path"],
         render: () => (
-          <FileInput
-            onClick={async () => {
-              const selected = await open({
-                multiple: false,
-                directory: true,
-              });
-              if (!selected || typeof selected !== "string") return;
-              setPuzzlesDirectory(selected);
-            }}
-            filename={puzzlesDirectory || null}
+          <Group align="flex-end" wrap="nowrap">
+            <FileInput
+              style={{ flex: 1 }}
+              onClick={async () => {
+                const selected = await open({
+                  multiple: false,
+                  directory: true,
+                });
+                if (!selected || typeof selected !== "string") return;
+                setPuzzlesDirectory(selected);
+              }}
+              filename={puzzlesDirectory || null}
+            />
+            <OpenFolderButton base="Puzzles" folder={puzzlesDirectory} />
+          </Group>
+        ),
+      },
+      {
+        id: "players-directory",
+        category: "directories",
+        title: t("Settings.Directories.Players"),
+        description: t("Settings.Directories.Players.Desc"),
+        keywords: ["players", "profiles", "images", "directory", "folder", "path"],
+        render: () => (
+          <Group align="flex-end" wrap="nowrap">
+            <FileInput
+              style={{ flex: 1 }}
+              onClick={async () => {
+                const selected = await open({
+                  multiple: false,
+                  directory: true,
+                });
+                if (!selected || typeof selected !== "string") return;
+                setPlayersDirectory(selected);
+              }}
+              filename={playersDirectory || null}
+            />
+            <OpenFolderButton base="Players" folder={playersDirectory} />
+          </Group>
+        ),
+      },
+      // Roleplay settings
+      {
+        id: "roleplay-enabled",
+        category: "roleplay",
+        title: t("Settings.Roleplay.Enabled"),
+        description: t("Settings.Roleplay.Enabled.Desc"),
+        keywords: ["roleplay", "intermission", "narrative", "images"],
+        render: () => (
+          <Switch
+            checked={roleplayEnabled}
+            onChange={(event) => setRoleplayEnabled(event.currentTarget.checked)}
+          />
+        ),
+      },
+      {
+        id: "roleplay-narrative",
+        category: "roleplay",
+        title: t("Settings.Roleplay.Narrative"),
+        description: t("Settings.Roleplay.Narrative.Desc"),
+        keywords: ["roleplay", "intermission", "narrative", "default"],
+        render: () => (
+          <Switch
+            checked={narrativeMode}
+            onChange={(event) => setNarrativeMode(event.currentTarget.checked)}
+          />
+        ),
+      },
+      {
+        id: "roleplay-duration",
+        category: "roleplay",
+        title: t("Settings.Roleplay.Duration"),
+        description: t("Settings.Roleplay.Duration.Desc"),
+        keywords: ["roleplay", "intermission", "duration", "seconds"],
+        render: () => (
+          <NumberSetting
+            value={roleplayDuration / 1000}
+            onChange={(value) => setRoleplayDuration(Math.round(value * 1000))}
+            step={0.5}
+            decimalScale={1}
+            suffix=" s"
+          />
+        ),
+      },
+      {
+        id: "roleplay-pulse-min",
+        category: "roleplay",
+        title: t("Settings.Roleplay.PulseMin"),
+        description: t("Settings.Roleplay.PulseMin.Desc"),
+        keywords: ["roleplay", "intermission", "pulse", "rhythm", "bpm", "minimum"],
+        render: () => <NumberSetting value={pulseMin} onChange={setPulseMin} />,
+      },
+      {
+        id: "roleplay-pulse-max",
+        category: "roleplay",
+        title: t("Settings.Roleplay.PulseMax"),
+        description: t("Settings.Roleplay.PulseMax.Desc"),
+        keywords: ["roleplay", "intermission", "pulse", "rhythm", "bpm", "maximum"],
+        render: () => <NumberSetting value={pulseMax} onChange={setPulseMax} />,
+      },
+      {
+        id: "roleplay-display",
+        category: "roleplay",
+        title: t("Settings.Roleplay.Display"),
+        description: t("Settings.Roleplay.Display.Desc"),
+        keywords: ["roleplay", "intermission", "player", "display", "fullscreen"],
+        render: () => (
+          <Select
+            w={220}
+            data={[
+              { value: "both", label: t("Settings.Roleplay.Display.Both") },
+              { value: "player1", label: t("Settings.Roleplay.Display.Player1") },
+              { value: "player2", label: t("Settings.Roleplay.Display.Player2") },
+            ]}
+            allowDeselect={false}
+            value={intermissionDisplay}
+            onChange={(value) =>
+              setIntermissionDisplay((value as "both" | "player1" | "player2") ?? "both")
+            }
+          />
+        ),
+      },
+      {
+        id: "roleplay-win-intermissions",
+        category: "roleplay",
+        title: t("Settings.Roleplay.WinIntermissions"),
+        description: t("Settings.Roleplay.WinIntermissions.Desc"),
+        keywords: ["roleplay", "intermission", "win", "capture", "check", "loss"],
+        render: () => (
+          <Switch
+            checked={winIntermissions}
+            onChange={(event) => setWinIntermissions(event.currentTarget.checked)}
           />
         ),
       },
@@ -696,6 +900,14 @@ export default function Page() {
       databasesDirectory,
       enginesDirectory,
       puzzlesDirectory,
+      playersDirectory,
+      roleplayEnabled,
+      roleplayDuration,
+      pulseMin,
+      pulseMax,
+      winIntermissions,
+      narrativeMode,
+      intermissionDisplay,
       setMoveNotationType,
       setMoveMethod,
       setIsNative,
@@ -703,6 +915,14 @@ export default function Page() {
       setDatabasesDirectory,
       setEnginesDirectory,
       setPuzzlesDirectory,
+      setPlayersDirectory,
+      setRoleplayEnabled,
+      setRoleplayDuration,
+      setPulseMin,
+      setPulseMax,
+      setWinIntermissions,
+      setNarrativeMode,
+      setIntermissionDisplay,
       setShowCoordinates,
       setMaterialDisplay,
       defaultPanelTab,
@@ -758,6 +978,11 @@ export default function Page() {
         title: t("Settings.Repertoire"),
         description: t("Settings.Repertoire.Desc"),
         icon: <IconBook size="1rem" />,
+      },
+      roleplay: {
+        title: t("Settings.Roleplay"),
+        description: t("Settings.Roleplay.Desc"),
+        icon: <IconUsers size="1rem" />,
       },
       privacy: {
         title: t("Settings.Privacy"),
@@ -901,6 +1126,9 @@ export default function Page() {
             <Tabs.Tab value="repertoire" leftSection={<IconBook size="1rem" />}>
               {t("Settings.Repertoire")}
             </Tabs.Tab>
+            <Tabs.Tab value="roleplay" leftSection={<IconUsers size="1rem" />}>
+              {t("Settings.Roleplay")}
+            </Tabs.Tab>
             <Tabs.Tab value="privacy" leftSection={<IconShield size="1rem" />}>
               {t("Settings.Privacy")}
             </Tabs.Tab>
@@ -1016,6 +1244,16 @@ export default function Page() {
                     {t("Settings.Repertoire.Desc")}
                   </Text>
                   {renderCategorySettings("repertoire")}
+                </Tabs.Panel>
+
+                <Tabs.Panel value="roleplay">
+                  <Text size="lg" fw={500} className={classes.title}>
+                    {t("Settings.Roleplay")}
+                  </Text>
+                  <Text size="xs" c="dimmed" mt={3} mb="lg">
+                    {t("Settings.Roleplay.Desc")}
+                  </Text>
+                  {renderCategorySettings("roleplay")}
                 </Tabs.Panel>
 
                 <Tabs.Panel value="privacy">

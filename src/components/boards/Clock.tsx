@@ -12,11 +12,13 @@ function Clock({
   turn,
   whiteTime,
   blackTime,
+  paused,
 }: {
   color: "white" | "black";
   turn: "white" | "black";
   whiteTime?: number;
   blackTime?: number;
+  paused?: boolean;
 }) {
   const store = useContext(TreeStateContext)!;
   const root = useStore(store, (s) => s.root);
@@ -62,7 +64,7 @@ function Clock({
         size="xs"
         w="100%"
         value={progress * 100}
-        animated={turn === color}
+        animated={!paused && turn === color}
         styles={{
           section: {
             animationDirection: "reverse",

@@ -19,7 +19,11 @@ export default defineConfig({
     server: {
         port: 1420,
         strictPort: true,
-        host: host || false,
+        // Bind explicitly to IPv4 loopback. With `false`/`localhost`, Node can
+        // bind only to `[::1]`, while WebKitGTK resolves `localhost` to
+        // 127.0.0.1 and then every request fails with
+        // "WebKit encountered an internal error ... internallyFailedLoadTimerFired".
+        host: host || "127.0.0.1",
         hmr: host
             ? {
                   protocol: "ws",
@@ -35,6 +39,12 @@ export default defineConfig({
         minify: isDebug ? false : "esbuild",
         sourcemap: isDebug ? "inline" : false,
         target: process.env.TAURI_ENV_PLATFORM == "windows" ? "chrome105" : "safari13",
+        rollupOptions: {
+            input: {
+                main: resolve(import.meta.dirname, "index.html"),
+                intermission: resolve(import.meta.dirname, "intermission.html"),
+            },
+        },
     },
     resolve: {
         alias: {
