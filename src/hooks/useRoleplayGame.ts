@@ -60,12 +60,13 @@ import {
     formatIntermissionIntro,
     getIntermissionIntro,
     getMoverMaterialDiff,
+    getSideMessageDifference,
     materialDurationMultiplier,
     pickProfileImage,
     pickProfileMessage,
     resolveIntermissionDuration,
     type SideOutcome,
-    shouldPlayIntermission,
+    shouldPlaySideIntermission,
 } from "@/utils/roleplay";
 import { unwrap } from "@/utils/unwrap";
 
@@ -267,7 +268,9 @@ export function useRoleplayGame({
                 return;
             }
 
-            if (!shouldPlayIntermission(trigger.materialDiff, materialThreshold)) {
+            const thresholdWhite = shouldPlaySideIntermission(trigger, "white", materialThreshold);
+            const thresholdBlack = shouldPlaySideIntermission(trigger, "black", materialThreshold);
+            if (!thresholdWhite && !thresholdBlack) {
                 // The backend pauses on every capture/check, so a skipped
                 // intermission must give the clock back.
                 await resumeClock();
@@ -311,8 +314,10 @@ export function useRoleplayGame({
                         ? player1Side === "black"
                         : player1Side === "white");
                 const whiteIsWin = trigger.outcome.white === "WIN";
-                const showWhite = displayWhite && (winIntermissions || !whiteIsWin);
-                const showBlack = displayBlack && (winIntermissions || whiteIsWin);
+                const showWhite =
+                    displayWhite && (winIntermissions || !whiteIsWin) && thresholdWhite;
+                const showBlack =
+                    displayBlack && (winIntermissions || whiteIsWin) && thresholdBlack;
 
                 if (!showWhite && !showBlack) {
                     // Nothing to show for this side/mode: don't hold the clock.
@@ -406,6 +411,8 @@ export function useRoleplayGame({
 
                 const id = crypto.randomUUID();
                 const startedAt = Date.now();
+                const whiteDifference = getSideMessageDifference(trigger, "white");
+                const blackDifference = getSideMessageDifference(trigger, "black");
 
                 const sides: { white: IntermissionSidePayload; black: IntermissionSidePayload } = {
                     white: {
@@ -416,7 +423,7 @@ export function useRoleplayGame({
                         durationMs: whiteDuration,
                         severity: trigger.severity,
                         outcome: trigger.outcome.white,
-                        difference: trigger.magnitude,
+                        difference: whiteDifference,
                         category: whiteImage.category,
                         folder: whiteImage.folder,
                     },
@@ -428,7 +435,7 @@ export function useRoleplayGame({
                         durationMs: blackDuration,
                         severity: trigger.severity,
                         outcome: trigger.outcome.black,
-                        difference: trigger.magnitude,
+                        difference: blackDifference,
                         category: blackImage.category,
                         folder: blackImage.folder,
                     },
@@ -475,7 +482,7 @@ export function useRoleplayGame({
                             message: whiteMessage.message,
                             durationMs: whiteDuration,
                             outcome: trigger.outcome.white,
-                            difference: trigger.magnitude,
+                            difference: whiteDifference,
                             endedAt: showWhite ? null : startedAt,
                             reason: showWhite ? null : "skipped",
                         },
@@ -486,7 +493,7 @@ export function useRoleplayGame({
                             message: blackMessage.message,
                             durationMs: blackDuration,
                             outcome: trigger.outcome.black,
-                            difference: trigger.magnitude,
+                            difference: blackDifference,
                             endedAt: showBlack ? null : startedAt,
                             reason: showBlack ? null : "skipped",
                         },
@@ -499,7 +506,7 @@ export function useRoleplayGame({
                         durationMs: whiteDuration,
                         severity: trigger.severity,
                         outcome: trigger.outcome.white,
-                        difference: trigger.magnitude,
+                        difference: whiteDifference,
                         category: whiteImage.category,
                         folder: whiteImage.folder,
                         endedAt: showWhite ? null : startedAt,
@@ -513,7 +520,7 @@ export function useRoleplayGame({
                         durationMs: blackDuration,
                         severity: trigger.severity,
                         outcome: trigger.outcome.black,
-                        difference: trigger.magnitude,
+                        difference: blackDifference,
                         category: blackImage.category,
                         folder: blackImage.folder,
                         endedAt: showBlack ? null : startedAt,

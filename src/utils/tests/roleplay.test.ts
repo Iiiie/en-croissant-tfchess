@@ -20,14 +20,16 @@ import {
     buildMediaSources,
     getIntermissionTrigger,
     getMoverMaterialDiff,
+    getSideMessageDifference,
     materialDurationMultiplier,
+    type IntermissionTrigger,
     type MediaSource,
     parseDifferenceRange,
     pickNearestDifferenceList,
     pickNearestDifferenceMessages,
     resolveIntermissionDuration,
     selectBestMessageCandidate,
-    shouldPlayIntermission,
+    shouldPlaySideIntermission,
 } from "../roleplay";
 
 function move(uci: string, san: string, fenAfter: string): GameMove {
@@ -150,12 +152,40 @@ describe("material difference", () => {
         expect(materialDurationMultiplier(10, 0)).toBe(1);
     });
 
-    test("gates intermissions by the absolute difference", () => {
-        expect(shouldPlayIntermission(0, 0)).toBe(true);
-        expect(shouldPlayIntermission(4, 5)).toBe(false);
-        expect(shouldPlayIntermission(5, 5)).toBe(true);
-        expect(shouldPlayIntermission(-5, 5)).toBe(true);
-        expect(shouldPlayIntermission(103, 103)).toBe(true);
+    test("gates LOSS sides by their signed deficit", () => {
+        const losingWhileAhead = {
+            materialDiff: 8,
+            outcome: { white: "LOSS", black: "WIN" },
+        } as IntermissionTrigger;
+        expect(shouldPlaySideIntermission(losingWhileAhead, "white", 0)).toBe(false);
+        expect(shouldPlaySideIntermission(losingWhileAhead, "black", 0)).toBe(false);
+
+        const losingWhileBehind = {
+            materialDiff: -8,
+            outcome: { white: "LOSS", black: "WIN" },
+        } as IntermissionTrigger;
+        expect(shouldPlaySideIntermission(losingWhileBehind, "white", 0)).toBe(true);
+        expect(shouldPlaySideIntermission(losingWhileBehind, "black", 0)).toBe(true);
+        expect(shouldPlaySideIntermission(losingWhileBehind, "white", 8)).toBe(true);
+        expect(shouldPlaySideIntermission(losingWhileBehind, "white", 9)).toBe(false);
+    });
+
+    test("gates WIN sides by their signed lead", () => {
+        const winningWhileAhead = {
+            materialDiff: 8,
+            outcome: { white: "WIN", black: "LOSS" },
+        } as IntermissionTrigger;
+        expect(shouldPlaySideIntermission(winningWhileAhead, "white", 0)).toBe(true);
+        expect(shouldPlaySideIntermission(winningWhileAhead, "white", 8)).toBe(true);
+        expect(shouldPlaySideIntermission(winningWhileAhead, "white", 9)).toBe(false);
+        expect(shouldPlaySideIntermission(winningWhileAhead, "black", 0)).toBe(true);
+
+        const winningWhileBehind = {
+            materialDiff: -8,
+            outcome: { white: "WIN", black: "LOSS" },
+        } as IntermissionTrigger;
+        expect(shouldPlaySideIntermission(winningWhileBehind, "white", 0)).toBe(false);
+        expect(shouldPlaySideIntermission(winningWhileBehind, "black", 0)).toBe(false);
     });
 });
 
@@ -185,6 +215,42 @@ describe("difference messages", () => {
     test("ignores empty lists", () => {
         expect(pickNearestDifferenceMessages({ "0": [], "4": ["four"] }, 0)).toEqual(["four"]);
         expect(pickNearestDifferenceMessages({}, 5)).toEqual([]);
+    });
+});
+
+describe("side message difference", () => {
+    function trigger(materialDiff: number, whiteOutcome: "WIN" | "LOSS"): IntermissionTrigger {
+        return {
+            materialDiff,
+            outcome: {
+                white: whiteOutcome,
+                black: whiteOutcome === "WIN" ? "LOSS" : "WIN",
+            },
+        } as IntermissionTrigger;
+    }
+
+    test("a LOSS side that is ahead uses tier 0", () => {
+        const t = trigger(9, "LOSS");
+        expect(getSideMessageDifference(t, "white")).toBe(0);
+        expect(getSideMessageDifference(t, "black")).toBe(0);
+    });
+
+    test("a LOSS side that is behind uses its deficit", () => {
+        const t = trigger(-9, "LOSS");
+        expect(getSideMessageDifference(t, "white")).toBe(9);
+        expect(getSideMessageDifference(t, "black")).toBe(9);
+    });
+
+    test("a WIN side that is behind uses tier 0", () => {
+        const t = trigger(-9, "WIN");
+        expect(getSideMessageDifference(t, "white")).toBe(0);
+        expect(getSideMessageDifference(t, "black")).toBe(0);
+    });
+
+    test("a WIN side that is ahead uses its lead", () => {
+        const t = trigger(9, "WIN");
+        expect(getSideMessageDifference(t, "white")).toBe(9);
+        expect(getSideMessageDifference(t, "black")).toBe(9);
     });
 });
 

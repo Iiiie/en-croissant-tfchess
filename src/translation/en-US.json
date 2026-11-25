@@ -821,7 +821,7 @@
     "Settings.Roleplay.MaterialMultiplier": "Material difference duration multiplier",
     "Settings.Roleplay.MaterialMultiplier.Desc": "Scales intermission length by the mover's material difference: 1 + (difference x multiplier / 2). The default 0 leaves duration unchanged; a mover who is behind gets shorter intermissions.",
     "Settings.Roleplay.MaterialThreshold": "Intermission material threshold",
-    "Settings.Roleplay.MaterialThreshold.Desc": "Only play intermissions when the absolute material difference after the move is at least this value (0-103). 0 plays every capture/check.",
+    "Settings.Roleplay.MaterialThreshold.Desc": "Only play a side's intermission when that side's material position is at least this far in the relevant direction (0-103): WIN = lead, LOSS = deficit. 0 allows tied material.",
     "Settings.Roleplay.Narrative": "Enable intermissions by default",
     "Settings.Roleplay.Narrative.Desc": "New games start with narrative intermissions enabled.",
     "Settings.Roleplay.PulseMax": "Maximum pulse BPM",

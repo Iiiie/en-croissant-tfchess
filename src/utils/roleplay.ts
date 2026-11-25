@@ -65,13 +65,44 @@ export function getMoverMaterialDiff(materialDiff: number, moveColor: "white" | 
     return moveColor === "white" ? materialDiff : -materialDiff;
 }
 
+export function getSideMaterialDifference(
+    trigger: IntermissionTrigger,
+    side: "white" | "black",
+): number {
+    return side === "white" ? trigger.materialDiff : -trigger.materialDiff;
+}
+
+/**
+ * Difference used for message/image tiers from this side's perspective.
+ * WIN tiers only count a material lead; LOSS tiers only count a deficit.
+ */
+export function getSideMessageDifference(
+    trigger: IntermissionTrigger,
+    side: "white" | "black",
+): number {
+    const sideDiff = getSideMaterialDifference(trigger, side);
+    return trigger.outcome[side] === "WIN" ? Math.max(0, sideDiff) : Math.max(0, -sideDiff);
+}
+
 export function materialDurationMultiplier(moverDiff: number, setting: number): number {
     const safeSetting = Math.max(0, setting);
     return Math.max(0, 1 + (moverDiff * safeSetting) / 2);
 }
 
-export function shouldPlayIntermission(materialDiff: number, threshold: number): boolean {
-    return Math.abs(materialDiff) >= Math.max(0, threshold);
+/**
+ * A side only gets an intermission once its own material position is at least
+ * `threshold` points in the relevant direction:
+ * - WIN side: lead >= threshold
+ * - LOSS side: deficit >= threshold
+ */
+export function shouldPlaySideIntermission(
+    trigger: IntermissionTrigger,
+    side: "white" | "black",
+    threshold: number,
+): boolean {
+    const sideDiff = getSideMaterialDifference(trigger, side);
+    const safeThreshold = Math.max(0, threshold);
+    return trigger.outcome[side] === "WIN" ? sideDiff >= safeThreshold : sideDiff <= -safeThreshold;
 }
 
 export type DifferenceRange = {
@@ -492,6 +523,7 @@ async function pickImageForSingleSource(args: {
         args.source.kind === "profile"
             ? await getProfileDir(args.source.profileId)
             : await getArchetypeDir(args.source.archetypeId);
+    const difference = getSideMessageDifference(args.trigger, args.side);
 
     for (const category of args.trigger.candidates[args.side]) {
         if (isOutcomeCategory(category)) {
@@ -500,7 +532,7 @@ async function pickImageForSingleSource(args: {
                 archetypeIds,
                 category,
             });
-            const ranges = await matchingRangeSubfolders(roots, args.trigger.magnitude);
+            const ranges = await matchingRangeSubfolders(roots, difference);
             const paths = differenceSubpaths({
                 ranges,
                 role: args.trigger.capturedRole,
@@ -599,16 +631,14 @@ export async function pickProfileMessage(args: {
         })),
     );
 
+    const difference = getSideMessageDifference(args.trigger, args.side);
     const candidates: MessageSourceCandidate[] = [];
     for (const { source, messages } of loaded) {
         const categories = args.trigger.candidates[args.side];
         for (let categoryIndex = 0; categoryIndex < categories.length; categoryIndex++) {
             const category = categories[categoryIndex];
             if (isOutcomeCategory(category)) {
-                const nearest = pickNearestDifferenceList(
-                    messages[category],
-                    args.trigger.magnitude,
-                );
+                const nearest = pickNearestDifferenceList(messages[category], difference);
                 if (nearest.list.length > 0) {
                     candidates.push({
                         source,
